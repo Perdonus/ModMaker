@@ -1,0 +1,373 @@
+import ast
+import operator
+from decimal import Decimal, getcontext
+from typing import Any
+
+from base_plugin import BasePlugin, MenuItemData, MenuItemType
+from ui.alert import AlertDialogBuilder
+from client_utils import get_last_fragment
+from android_utils import run_on_ui_thread
+from hook_utils import find_class
+from java import dynamic_proxy
+
+# Установка точности для Decimal для высокоточных вычислений
+getcontext().prec = 30
+
+# --- Импорт критических Android/Java классов ---
+TextView = find_class("android.widget.TextView")
+GridLayout = find_class("android.widget.GridLayout")
+LinearLayout = find_class("android.widget.LinearLayout")
+EditText = find_class("android.widget.EditText")
+Button = find_class("android.widget.Button")
+Gravity = find_class("android.view.Gravity")
+OnClickListenerInterface = find_class("android.view.View$OnClickListener")
+GridLayoutLayoutParams = find_class("android.widget.GridLayout$LayoutParams")
+AndroidUtilities = find_class("org.telegram.messenger.AndroidUtilities")
+InputType = find_class("android.text.InputType")
+HapticFeedbackConstants = find_class("android.view.HapticFeedbackConstants")
+LinearLayoutLayoutParams = find_class("android.widget.LinearLayout$LayoutParams")
+Typeface = find_class("android.graphics.Typeface")  
+Color = find_class("android.graphics.Color")  
+
+__id__ = "Calculator_UI_pg" 
+__name__ = "Calculator UI"
+__description__ = "Улучшенный калькулятор UI"
+__author__ = "@SaturnFake & @Shark_Plugins" #подпишись)
+__version__ = "1.0.0"
+__min_version__ = "11.12.0"
+
+
+OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+}
+
+
+def safe_eval(expression: str) -> Decimal:
+    """
+    Безопасно вычисляет математическое выражение, используя AST.
+    """
+    if not expression.strip():
+        return Decimal(0)
+
+    expression = expression.replace('^', '**')
+    
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        raise ValueError("Invalid syntax")
+
+    def eval_tree(node: Any) -> Decimal:
+        if isinstance(node, ast.Num):
+            return Decimal(node.n)
+        elif isinstance(node, ast.BinOp):
+            op = OPERATORS.get(type(node.op))
+            if op is None:
+                raise ValueError("Unsupported operator")
+            return op(eval_tree(node.left), eval_tree(node.right))
+        elif isinstance(node, ast.UnaryOp):
+            op = OPERATORS.get(type(node.op))
+            if op is None:
+                raise ValueError("Unsupported unary operator")
+            return op(eval_tree(node.operand))
+        elif isinstance(node, ast.Expression):
+            return eval_tree(node.body)
+        elif isinstance(node, ast.Constant):
+             return Decimal(node.value)
+        else:
+            raise ValueError(f"Unsupported expression type: {type(node).__name__}")
+
+    return eval_tree(tree.body)
+
+
+class CalcButtonClickListener(dynamic_proxy(OnClickListenerInterface)):
+    """класс для обработки нажатий на кнопки"""
+    def __init__(self, plugin: 'CalcPlugin', input_text_view: EditText, result_text_view: TextView, button_text: str):
+        super().__init__()
+        self.plugin = plugin
+        self.input_text_view = input_text_view
+        self.result_text_view = result_text_view 
+        self.button_text = button_text
+
+    def onClick(self, view: Any):
+        
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        self.plugin.on_button_click(
+            self.input_text_view, self.result_text_view, self.button_text
+        )  
+        #>^_^<#
+
+
+class CalcPlugin(BasePlugin):
+    """Основной класс калькулятора."""
+
+    def __init__(self):
+        super().__init__()
+        self.pg_data_handler = None
+
+    def on_plugin_load(self):
+        self.add_menu_item(
+            MenuItemData(
+                menu_type=MenuItemType.CHAT_ACTION_MENU,
+                text="Калькулятор",
+                icon="sPluginIDE/10",
+                on_click=self.open_calculator,
+            )
+        )
+
+    def open_calculator(self, context: dict[str, Any]):
+        run_on_ui_thread(lambda: self.show_calculator_dialog())
+
+    def show_calculator_dialog(self):
+        fragment = get_last_fragment()
+        activity = fragment and fragment.getParentActivity()
+        if not activity:
+            return
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Калькулятор")
+        
+        main_layout = LinearLayout(activity)
+        main_layout.setOrientation(LinearLayout.VERTICAL)
+        
+        input_text_view = self.create_input_text_view(activity)
+        main_layout.addView(input_text_view)
+        
+        result_text_view = self.create_result_text_view(activity)
+        main_layout.addView(result_text_view)
+        
+        button_layout = self.create_button_layout(
+            activity, input_text_view, result_text_view
+        )  
+        main_layout.addView(button_layout)
+        
+        builder.set_view(main_layout)
+        builder.set_negative_button("Закрыть", lambda b, w: b.dismiss())
+        builder.show()
+
+    def create_input_text_view(self, activity: Any) -> EditText:
+        """Создает и настраивает поле для ввода выражения."""
+        editTextParams = LinearLayoutLayoutParams(
+            LinearLayoutLayoutParams.MATCH_PARENT, AndroidUtilities.dp(48)
+        )
+        editTextParams.setMargins(AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(4))
+        
+        input_text_view = EditText(activity)
+        input_text_view.setHint("0")
+        input_text_view.setTextSize(24)
+        input_text_view.setGravity(Gravity.END | Gravity.CENTER_VERTICAL)
+        input_text_view.setInputType(InputType.TYPE_NULL)
+        input_text_view.setFocusable(True)
+        input_text_view.setFocusableInTouchMode(True)
+        input_text_view.setLayoutParams(editTextParams)
+        input_text_view.setTypeface(Typeface.DEFAULT_BOLD)
+        input_text_view.setTextColor(Color.WHITE)
+        input_text_view.setBackgroundColor(Color.TRANSPARENT)
+        return input_text_view
+
+    def create_result_text_view(self, activity: Any) -> TextView:
+        """Создает и настраивает поле для вывода текущего результата."""
+        textViewParams = LinearLayoutLayoutParams(
+            LinearLayoutLayoutParams.MATCH_PARENT, AndroidUtilities.dp(36)
+        )
+        textViewParams.setMargins(
+            AndroidUtilities.dp(16), 0, AndroidUtilities.dp(16), AndroidUtilities.dp(8)
+        )
+
+        result_text_view = TextView(activity)
+        result_text_view.setTextSize(20)
+        result_text_view.setGravity(Gravity.END | Gravity.CENTER_VERTICAL)
+        result_text_view.setLayoutParams(textViewParams)
+        result_text_view.setTypeface(Typeface.DEFAULT_BOLD)
+        result_text_view.setTextColor(Color.parseColor("#808080")) 
+        return result_text_view  
+    
+    def create_button_layout(self, activity: Any, input_text_view: EditText, result_text_view: TextView) -> GridLayout: 
+        """Создает сетку кнопок калькулятора."""
+        gridLayoutParams = LinearLayoutLayoutParams(
+            LinearLayoutLayoutParams.WRAP_CONTENT, LinearLayoutLayoutParams.WRAP_CONTENT
+        )
+        gridLayoutParams.gravity = Gravity.CENTER_HORIZONTAL
+        
+        button_layout = GridLayout(activity)
+        button_layout.setColumnCount(4)
+        button_layout.setLayoutParams(gridLayoutParams)
+
+        buttons = [
+            ("AC", Color.parseColor("#ff6347")),
+            ("()", Color.parseColor("#808080")), 
+            ("⌦", Color.parseColor("#808080")), 
+            ("/", Color.parseColor("#ffa500")),
+            
+            ("7", Color.parseColor("#333333")),
+            ("8", Color.parseColor("#333333")),
+            ("9", Color.parseColor("#333333")),
+            ("*", Color.parseColor("#ffa500")),
+            
+            ("4", Color.parseColor("#333333")),
+            ("5", Color.parseColor("#333333")),
+            ("6", Color.parseColor("#333333")),
+            ("-", Color.parseColor("#ffa500")),
+            
+            ("1", Color.parseColor("#333333")),
+            ("2", Color.parseColor("#333333")),
+            ("3", Color.parseColor("#333333")),
+            ("+", Color.parseColor("#ffa500")),
+            
+            ("00", Color.parseColor("#333333")),
+            ("0", Color.parseColor("#333333")),
+            (".", Color.parseColor("#333333")),
+            ("=", Color.parseColor("#ffa500")),
+        ] 
+        
+        row = 0
+        col = 0
+        button_size = AndroidUtilities.dp(64) 
+        margin = AndroidUtilities.dp(4)
+
+        for i, (button_text, color) in enumerate(buttons):
+            button = self.create_button(
+                activity,
+                input_text_view,
+                result_text_view,
+                button_text,
+                color,
+                button_size,
+                margin,
+                row,
+                col,
+            ) 
+            button_layout.addView(button)
+            col += 1
+            if col > 3:
+                col = 0
+                row += 1
+
+        return button_layout
+
+    def create_button(
+        self,
+        activity: Any,
+        input_text_view: EditText,
+        result_text_view: TextView,
+        button_text: str,
+        color: int,
+        button_size: int,
+        margin: int,
+        row: int,
+        col: int,
+        column_span: int = 1,
+    ) -> Button:  
+        """Создакт и настраивает кнопку."""
+        button = Button(activity)
+        button.setText(button_text)
+        button.setTextSize(20)
+        button.setTextColor(Color.WHITE)
+        
+        bg = find_class("android.graphics.drawable.GradientDrawable")()
+        bg.setShape(bg.RECTANGLE)
+        bg.setCornerRadius(AndroidUtilities.dp(16))
+        bg.setColor(color)
+        button.setBackground(bg)
+        
+        button.setOnClickListener(
+            CalcButtonClickListener(
+                self, input_text_view, result_text_view, button_text
+            )
+        )  
+
+        params = GridLayoutLayoutParams()
+        params.width = button_size
+        params.height = button_size
+        params.setMargins(margin, margin, margin, margin)
+        params.rowSpec = GridLayout.spec(row)
+        params.columnSpec = GridLayout.spec(col, column_span)
+        button.setLayoutParams(params)
+        return button
+
+    def on_button_click(self, input_text_view: EditText, result_text_view: TextView, button_text: str):  
+        """Логика обработки нажатия на кнопку."""
+        current_text = input_text_view.getText().toString()
+        pg_operators = ["+", "-", "*", "/"]
+
+        if button_text == "=":
+            try:
+                result = str(safe_eval(current_text))
+                input_text_view.setText(result)
+                result_text_view.setText("")  
+
+            except Exception as e:
+                error_msg = f"Ошибка: {type(e).__name__}"
+                input_text_view.setText(error_msg) 
+                result_text_view.setText("")  
+                input_text_view.setTextColor(Color.RED)
+        
+        elif button_text == "AC":
+            input_text_view.setText("")
+            result_text_view.setText("")
+            input_text_view.setHint("0")  
+            input_text_view.setTextColor(Color.WHITE)  
+            
+        elif button_text == "⌦":
+            if current_text:  
+                new_text = current_text[:-1]
+                input_text_view.setText(new_text)
+                
+        elif button_text == "%":
+            if current_text and current_text[-1].isdigit():
+                try:
+                    result = str(safe_eval(current_text + "/100"))
+                    input_text_view.setText(result)
+                    result_text_view.setText("")
+                except Exception as e:
+                    error_msg = f"Ошибка: {type(e).__name__}"
+                    input_text_view.setText(error_msg)  
+                    result_text_view.setText("")
+        
+        elif button_text == "()":
+            open_count = current_text.count('(')
+            close_count = current_text.count(')')
+            
+            if open_count == close_count or current_text.endswith('('):
+                new_text = current_text + '('
+            else:
+                new_text = current_text + ')'
+            input_text_view.setText(new_text)
+            
+        elif button_text in pg_operators:
+            if current_text and current_text[-1] in pg_operators:
+                new_text = current_text[:-1] + button_text
+            else:
+                new_text = current_text + button_text
+            input_text_view.setText(new_text)
+
+        else: 
+            if current_text.startswith("Ошибка:"):
+                input_text_view.setText(button_text)
+                input_text_view.setTextColor(Color.WHITE)
+            else:
+                new_text = current_text + button_text
+                input_text_view.setText(new_text)
+
+        if not input_text_view.getText().toString():  
+            input_text_view.setTextColor(Color.WHITE)
+            input_text_view.setHint("0")
+        elif input_text_view.getText().toString().startswith("Ошибка:"):
+            return
+            
+        try:
+            expression_to_eval = input_text_view.getText().toString()
+            if expression_to_eval and expression_to_eval[-1] not in pg_operators:
+                result = str(safe_eval(expression_to_eval))
+                result_text_view.setText("= " + result)
+            else:
+                result_text_view.setText("")
+        except Exception:
+            result_text_view.setText("")
+
+        if not input_text_view.getText().toString():
+            result_text_view.setText("")

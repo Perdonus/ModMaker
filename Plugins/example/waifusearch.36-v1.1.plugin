@@ -1,0 +1,153 @@
+import traceback
+from ui.alert import AlertDialogBuilder
+from client_utils import run_on_queue, send_message, get_last_fragment
+from markdown_utils import parse_markdown
+from android_utils import run_on_ui_thread
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from java.util import Locale
+
+__name__ = "WaifuSearch"
+__description__ = "Отправляет случайную картинку... Ну вы поняли. Использование: .ws"
+__id__ = "waifusearch"
+__version__ = "1.1"
+__author__ = "@iquldev"
+__min_version__ = "11.9.1"
+
+class Locales:
+    default = {
+        "loading": "Загрузка...",
+        "loading_title": "Загрузка",
+        "loading_message": "Получаем картинку...",
+        "error": "Ошибка при получении картинки!",
+        "error_network": "Ошибка сети при получении картинки! Проверьте подключение.",
+        "error_timeout": "Превышено время ожидания ответа от сервера!",
+        "error_rate_limit": "Сервер временно недоступен. Попробуйте позже!",
+        "exception": "Произошла ошибка в плагине:",
+        "ratelimit": "Достигнут лимит запросов. Попробуйте позже!",
+    }
+    ru = default
+    en = default
+
+def localise(key: str) -> str:
+    locale = Locale.getDefault().getLanguage()
+    locale_dict = getattr(Locales, locale, Locales.default)
+    return locale_dict.get(key, key)
+
+class WaifuSearch(BasePlugin):
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+
+    def on_send_message_hook(self, account, params):
+        if not hasattr(params, "message") or not isinstance(params.message, str):
+            return HookResult()
+        if not params.message.startswith(".ws"):
+            return HookResult()
+        try:
+            self._show_loading_dialog()
+
+            def fetch_and_send():
+                import json
+                from urllib.request import Request, urlopen
+                from urllib.error import URLError, HTTPError
+
+                url = "https://api.waifu.im/search?gif=false&is_nsfw=true"
+                headers = {
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/140.0"
+                }
+
+                import time as _time
+                max_attempts = 10
+                attempt = 0
+                while True:
+                    attempt += 1
+                    try:
+                        request = Request(url, headers=headers)
+                        with urlopen(request, timeout=10) as response:
+                            data = json.loads(response.read().decode('utf-8'))
+
+                        images = data.get('images', [])
+                        if not images:
+                            raise ValueError("API не вернул изображений")
+
+                        img = images[0]
+                        if img is None or not isinstance(img, dict):
+                            raise ValueError("Неверный формат данных изображения")
+
+                        image_url = img.get('url') if img else None
+                        artist_data = img.get('artist', {}) if img else {}
+                        artist = artist_data.get('name', '?') if isinstance(artist_data, dict) else '?'
+                        source = img.get('source', '') if img else ''
+
+                        if not image_url or artist == '?':
+                            if attempt >= max_attempts:
+                                msg = f"{localise('error')} (Нет валидного изображения после {max_attempts} попыток)"
+                                send_message({"peer": params.peer, "message": msg, "replyToMsg": getattr(params, "replyToMsg", None)})
+                                break
+                            _time.sleep(1)
+                            continue
+
+                        caption = None
+                        text = [f"Автор: _{artist}_"]
+                        if source:
+                            text.append(f"[Источник]({source})")
+                        caption = parse_markdown('\n'.join(text))
+
+                        msg = {
+                            "peer": params.peer,
+                            "file": image_url,
+                            "replyToMsg": getattr(params, "replyToMsg", None)
+                        }
+                        if caption:
+                            msg["message"] = caption.text
+                            msg["entities"] = [e.to_tlrpc_object() for e in caption.entities]
+                        send_message(msg)
+                        break
+                    except HTTPError as e:
+                        msg = localise("error_rate_limit") if e.code == 429 else f"{localise('error')} (HTTP {e.code})"
+                        send_message({"peer": params.peer, "message": msg, "replyToMsg": getattr(params, "replyToMsg", None)})
+                        break
+                    except URLError as e:
+                        msg = localise("error_timeout") if "timeout" in str(e.reason).lower() else f"{localise('error_network')} ({str(e.reason)})"
+                        send_message({"peer": params.peer, "message": msg, "replyToMsg": getattr(params, "replyToMsg", None)})
+                        break
+                    except Exception as e:
+                        if attempt >= max_attempts:
+                            msg = f"{localise('error')} ({str(e)})"
+                            send_message({"peer": params.peer, "message": msg, "replyToMsg": getattr(params, "replyToMsg", None)})
+                            break
+                        _time.sleep(1)
+                run_on_ui_thread(self._hide_loading_dialog)
+
+            run_on_queue(fetch_and_send)
+            return HookResult(strategy=HookStrategy.CANCEL)
+        except Exception:
+            params.message = f"{localise('exception')} {__name__}:\n\n{traceback.format_exc()}"
+            return HookResult(strategy=HookStrategy.MODIFY_FINAL, params=params)
+        
+    def _show_loading_dialog(self):
+        try:
+            current_fragment = get_last_fragment()
+            if not current_fragment:
+                return
+            
+            activity = current_fragment.getParentActivity()
+            if not activity:
+                return
+            
+            self.loading_dialog = AlertDialogBuilder(activity, AlertDialogBuilder.ALERT_TYPE_SPINNER)
+            self.loading_dialog.set_title(localise("loading_title"))
+            self.loading_dialog.set_message(localise("loading_message"))
+            self.loading_dialog.set_cancelable(False)
+            self.loading_dialog.show()
+            
+        except Exception as e:
+            pass
+
+    def _hide_loading_dialog(self):
+        try:
+            if self.loading_dialog:
+                self.loading_dialog.dismiss()
+                self.loading_dialog = None
+        except Exception as e:
+            pass

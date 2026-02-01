@@ -1,0 +1,114 @@
+# -*- coding: utf-8 -*-
+# Плагин сгенерирован @exteragrampluginmakerbot
+
+# Плагин сгенерирован @exteragrampluginmakerbot
+from base_plugin import BasePlugin, MenuItemData, MenuItemType
+# Плагин сгенерирован @exteragrampluginmakerbot
+from client_utils import get_last_fragment, get_messages_controller
+# Плагин сгенерирован @exteragrampluginmakerbot
+from android_utils import log
+# Плагин сгенерирован @exteragrampluginmakerbot
+
+# Плагин сгенерирован @exteragrampluginmakerbot
+__id__ = "exterastoreshortcut"
+# Плагин сгенерирован @exteragrampluginmakerbot
+__name__ = "ExteraStore Shortcut"
+# Плагин сгенерирован @exteragrampluginmakerbot
+__description__ = "Добавляет кнопку для открытия бота @exterastore_bot в боковом меню."
+# Плагин сгенерирован @exteragrampluginmakerbot
+__author__ = "@exteragrampluginmakerbot @leonidtsk"
+# Плагин сгенерирован @exteragrampluginmakerbot
+__version__ = "1.2.0"
+# Плагин сгенерирован @exteragrampluginmakerbot
+__min_version__ = "11.9.0"
+# Плагин сгенерирован @exteragrampluginmakerbot
+__icon__ = "MyDevStickers6/1"
+# Плагин сгенерирован @exteragrampluginmakerbot
+
+# Плагин сгенерирован @exteragrampluginmakerbot
+class ExteraStorePlugin(BasePlugin):
+# Плагин сгенерирован @exteragrampluginmakerbot
+    """
+# Плагин сгенерирован @exteragrampluginmakerbot
+    Плагин, который добавляет кнопку для быстрого доступа к боту ExteraStore в боковое меню.
+# Плагин сгенерирован @exteragrampluginmakerbot
+    """
+# Плагин сгенерирован @exteragrampluginmakerbot
+
+# Плагин сгенерирован @exteragrampluginmakerbot
+    def on_plugin_load(self):
+# Плагин сгенерирован @exteragrampluginmakerbot
+        """
+# Плагин сгенерирован @exteragrampluginmakerbot
+        Вызывается при загрузке плагина.
+# Плагин сгенерирован @exteragrampluginmakerbot
+        Здесь мы добавляем наш пункт в боковое меню.
+# Плагин сгенерирован @exteragrampluginmakerbot
+        """
+# Плагин сгенерирован @exteragrampluginmakerbot
+        try:
+# Плагин сгенерирован @exteragrampluginmakerbot
+            self.add_menu_item(
+# Плагин сгенерирован @exteragrampluginmakerbot
+                MenuItemData(
+# Плагин сгенерирован @exteragrampluginmakerbot
+                    menu_type=MenuItemType.DRAWER_MENU,
+# Плагин сгенерирован @exteragrampluginmakerbot
+                    text="ExteraStore",
+# Плагин сгенерирован @exteragrampluginmakerbot
+                    icon="msg_download", # Иконка изменена на значок загрузки
+# Плагин сгенерирован @exteragrampluginmakerbot
+                    on_click=self._open_store_bot
+# Плагин сгенерирован @exteragrampluginmakerbot
+                )
+# Плагин сгенерирован @exteragrampluginmakerbot
+            )
+# Плагин сгенерирован @exteragrampluginmakerbot
+            log(f"[{__name__}] Plugin loaded and menu item added.")
+# Плагин сгенерирован @exteragrampluginmakerbot
+        except Exception as e:
+# Плагин сгенерирован @exteragrampluginmakerbot
+            log(f"[{__name__}] Error on loading: {e}")
+# Плагин сгенерирован @exteragrampluginmakerbot
+
+# Плагин сгенерирован @exteragrampluginmakerbot
+    def _open_store_bot(self, context: dict):
+# Плагин сгенерирован @exteragrampluginmakerbot
+        """
+# Плагин сгенерирован @exteragrampluginmakerbot
+        Эта функция вызывается при нажатии на наш пункт меню.
+# Плагин сгенерирован @exteragrampluginmakerbot
+        Она открывает чат с ботом @exterastore_bot.
+# Плагин сгенерирован @exteragrampluginmakerbot
+        """
+# Плагин сгенерирован @exteragrampluginmakerbot
+        bot_username = "exterastore_bot"
+# Плагин сгенерирован @exteragrampluginmakerbot
+        try:
+# Плагин сгенерирован @exteragrampluginmakerbot
+            # Получаем текущий активный фрагмент (экран)
+# Плагин сгенерирован @exteragrampluginmakerbot
+            fragment = get_last_fragment()
+# Плагин сгенерирован @exteragrampluginmakerbot
+            if fragment:
+# Плагин сгенерирован @exteragrampluginmakerbot
+                # Используем MessagesController для открытия чата по юзернейму
+# Плагин сгенерирован @exteragrampluginmakerbot
+                get_messages_controller().openByUserName(bot_username, fragment, 1)
+# Плагин сгенерирован @exteragrampluginmakerbot
+                log(f"[{__name__}] Opening bot: @{bot_username}")
+# Плагин сгенерирован @exteragrampluginmakerbot
+            else:
+# Плагин сгенерирован @exteragrampluginmakerbot
+                # Если не удалось получить фрагмент, логируем ошибку
+# Плагин сгенерирован @exteragrampluginmakerbot
+                log(f"[{__name__}] Could not get fragment to open the bot.")
+# Плагин сгенерирован @exteragrampluginmakerbot
+        except Exception as e:
+# Плагин сгенерирован @exteragrampluginmakerbot
+            log(f"[{__name__}] Failed to open bot @{bot_username}: {e}")
+# Плагин сгенерирован @exteragrampluginmakerbot
+
+# Плагин сгенерирован @exteragrampluginmakerbot
+    # on_plugin_unload не требуется, так как пункты меню удаляются автоматически.
+# Плагин сгенерирован @exteragrampluginmakerbot

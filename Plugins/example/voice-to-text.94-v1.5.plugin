@@ -1,0 +1,478 @@
+from android_utils import run_on_ui_thread
+from base_plugin import BasePlugin, HookResult
+from client_utils import  get_last_fragment, run_on_queue, get_messages_controller, send_request, RequestCallback, get_user_config
+from java import cast
+from java.util import Locale, ArrayList
+from org.telegram.tgnet import TLRPC
+from typing import List, Any
+from ui.alert import AlertDialogBuilder
+from ui.bulletin import BulletinHelper
+import requests
+import ui.settings as Settings
+
+__id__ = "voice-to-text"
+__name__ = "Voice to Text"
+__description__ = "Transcribes voice messages and adds text to the caption of them."
+__author__ = "@PESSDES_Plugins"
+__min_version__ = "11.12.0"
+__icon__ = "VoiceToText7/0"
+__version__ = "1.5"
+
+def jarray_to_array(jarray) -> List[Any]:
+    vs = []    
+    it = jarray.iterator()
+    while it.hasNext():
+        vs.append(it.next())
+    return vs      
+
+def is_voice(document) -> bool:
+    if not document or not document.attributes:
+        return False
+    for attr in jarray_to_array(document.attributes):
+        if isinstance(attr, TLRPC.TL_documentAttributeAudio):
+            if getattr(attr, "voice", False):
+                return True
+    return False
+
+class Localization:
+    def __init__(self):
+        self.language = Locale.getDefault().getLanguage()
+        self.language = self.language if self.language in self._get_supported_languages() else "en"
+        
+    def get_string(self, string_key):
+        return self.strings[self.language].get(string_key, self.strings["en"].get(string_key, string_key))
+
+    def _get_supported_languages(self):
+        return self.strings.keys() 
+    
+    def __getitem__(self, key):
+        return self.get_string(key)
+    
+    strings = {
+        "ru": {
+            "API_KEY_TEXT": "API Ключ Deepgram",
+            "API_KEY_DESCRIPTION": "Ваш API ключ Deepgram для преобразования речи в текст.",
+            "MODEL_TEXT": "Название модели",
+            "MODEL_CUSTOM_TEXT": "Пользовательская модель",
+            "MODEL_CUSTOM_DESCRIPTION": "Вы можете указать пользовательское название модели доступное в Deepgram.",
+            "SETTINGS_HEADER_TEXT": "Настройки API",
+            "MODEL_SETTINGS_HEADER_TEXT": "Настройки распознавания",
+            "LANGUAGE_TEXT": "Язык распознования",
+            "WHISPER_FILTER_TEXT": "Фильтр Whisper",
+            "WHISPER_FILTER_DESCRIPTION": "В моделях Whisper довольно часто при распознавании русской речи встречаются ошибочные фразы, который не имеют отношения к настоящему аудио (например: 'Субтитры добавил DimaTorzok')",
+            "ERROR": "Не удалось распознать речь",
+            "TIMEOUT_ERROR": "Превышено время ожидания запроса (30сек)",
+        },
+        "en": {
+            "API_KEY_TEXT": "Deepgram API Key",
+            "API_KEY_DESCRIPTION": "Your Deepgram API key for transcribing speech to text.",
+            "MODEL_TEXT": "Model name",
+            "MODEL_CUSTOM_TEXT": "Custom model",
+            "MODEL_CUSTOM_DESCRIPTION": "You can specify a custom model name available in Deepgram.",
+            "SETTINGS_HEADER_TEXT": "API Settings",
+            "MODEL_SETTINGS_HEADER_TEXT": "Transcribe Settings",
+            "LANGUAGE_TEXT": "Language recognition",
+            "WHISPER_FILTER_TEXT": "Whisper Filter",
+            "WHISPER_FILTER_DESCRIPTION": "In Whisper models, russian speech recognition often contains hallucinations phrases that have no relation to real audio (for example: 'Субтитры добавил DimaTorzok')",
+            "ERROR": "Failed to transcribe voice",
+            "TIMEOUT_ERROR": "Request timeout (30s)"
+        }
+    }
+
+strings = Localization()
+
+class SupportedFeatures:
+    def __init__(self, summarize=True, topics=True, intents=True, detect_entities=True, sentiment=True, smart_format=True, punctuate=True, paragraphs=True, utterances=True, profanity_filter=True, redact=True, diarize=True, filler_words=True):
+        self.summarize = summarize
+        self.topics = topics
+        self.intents = intents
+        self.detect_entities = detect_entities
+        self.sentiment = sentiment
+        self.smart_format = smart_format
+        self.punctuate = punctuate
+        self.paragraphs = paragraphs
+        self.utterances = utterances
+        self.profanity_filter = profanity_filter
+        self.redact = redact
+        self.diarize = diarize
+        self.filler_words = filler_words
+
+class Language:
+    def __init__(self, name: str, code: str, supported_feutures: SupportedFeatures = SupportedFeatures()):
+        self.name = name
+        self.code = code
+        self.supported_features = supported_feutures
+
+languages: List[Language] = [
+    Language("Afrikaans", "af"),
+    Language("Amharic", "am"),
+    Language("Arabic", "ar"),
+    Language("Assamese", "as"),
+    Language("Azerbaijani", "az"),
+    Language("Bashkir", "ba"),
+    Language("Belarusian", "be"),
+    Language("Bulgarian", "bg"),
+    Language("Bengali", "bn"),
+    Language("Tibetan", "bo"),
+    Language("Breton", "br"),
+    Language("Bosnian", "bs"),
+    Language("Catalan", "ca"),
+    Language("Czech", "cs"),
+    Language("Welsh", "cy"),
+    Language("Danish", "da"),
+    Language("Danish (DK)", "da-DK"),
+    Language("German", "de"),
+    Language("German (Switzerland)", "de-CH"),
+    Language("Greek", "el"),
+    Language("English", "en"),
+    Language("English (AU)", "en-AU"),
+    Language("English (GB)", "en-GB"),
+    Language("English (IN)", "en-IN"),
+    Language("English (NZ)", "en-NZ"),
+    Language("English (US)", "en-US"),
+    Language("Spanish", "es"),
+    Language("Spanish (419)", "es-419"),
+    Language("Estonian", "et"),
+    Language("Basque", "eu"),
+    Language("Persian", "fa"),
+    Language("Faroese", "fo"),
+    Language("Finnish", "fi"),
+    Language("French", "fr"),
+    Language("French (CA)", "fr-CA"),
+    Language("Galician", "gl"),
+    Language("Gujarati", "gu"),
+    Language("Hausa", "ha"),
+    Language("Hawaiian", "haw"),
+    Language("Hebrew", "he"),
+    Language("Hindi", "hi"),
+    Language("Croatian", "hr"),
+    Language("Haitian Creole", "ht"),
+    Language("Hungarian", "hu"),
+    Language("Armenian", "hy"),
+    Language("Indonesian", "id"),
+    Language("Icelandic", "is"),
+    Language("Italian", "it"),
+    Language("Japanese", "ja"),
+    Language("Javanese", "jw"),
+    Language("Georgian", "ka"),
+    Language("Kazakh", "kk"),
+    Language("Khmer", "km"),
+    Language("Kannada", "kn"),
+    Language("Korean", "ko"),
+    Language("Korean (KR)", "ko-KR"),
+    Language("Latin", "la"),
+    Language("Luxembourgish", "lb"),
+    Language("Lingala", "ln"),
+    Language("Lao", "lo"),
+    Language("Lithuanian", "lt"),
+    Language("Latvian", "lv"),
+    Language("Multilingual (autodetection)", "multi"),
+    Language("Malagasy", "mg"),
+    Language("Maori", "mi"),
+    Language("Macedonian", "mk"),
+    Language("Malayalam", "ml"),
+    Language("Mongolian", "mn"),
+    Language("Marathi", "mr"),
+    Language("Malay", "ms"),
+    Language("Maltese", "mt"),
+    Language("Burmese", "my"),
+    Language("Nepali", "ne"),
+    Language("Dutch", "nl"),
+    Language("Flemish", "nl-BE"),
+    Language("Norwegian", "no"),
+    Language("Norwegian Nynorsk", "nn"),
+    Language("Occitan", "oc"),
+    Language("Punjabi", "pa"),
+    Language("Polish", "pl"),
+    Language("Pashto", "ps"),
+    Language("Portuguese", "pt"),
+    Language("Portuguese (BR)", "pt-BR"),
+    Language("Portuguese (PT)", "pt-PT"),
+    Language("Romanian", "ro"),
+    Language("Russian", "ru", supported_feutures=SupportedFeatures(summarize=False,topics=False,intents=False,detect_entities=False,sentiment=False,profanity_filter=False,redact=False,filler_words=False)),
+    Language("Sindhi", "sd"),
+    Language("Sinhala", "si"),
+    Language("Slovak", "sk"),
+    Language("Slovenian", "sl"),
+    Language("Shona", "sn"),
+    Language("Somali", "so"),
+    Language("Albanian", "sq"),
+    Language("Serbian", "sr"),
+    Language("Sundanese", "su"),
+    Language("Swedish", "sv"),
+    Language("Swedish (SE)", "sv-SE"),
+    Language("Swahili", "sw"),
+    Language("Tamil", "ta"),
+    Language("Telugu", "te"),
+    Language("Tajik", "tg"),
+    Language("Thai", "th"),
+    Language("Thai (TH)", "th-TH"),
+    Language("Turkmen", "tk"),
+    Language("Tagalog", "tl"),
+    Language("Tatar", "tt"),
+    Language("Ukrainian", "uk"),
+    Language("Urdu", "ur"),
+    Language("Uzbek", "uz"),
+    Language("Vietnamese", "vi"),
+    Language("Yiddish", "yi"),
+    Language("Yoruba", "yo"),
+    Language("Chinese (Mandarin, Simplified)", "zh"),
+    Language("Chinese (Mandarin, Simplified)", "zh-CN"),
+    Language("Chinese (Mandarin, Simplified)", "zh-Hans"),
+    Language("Chinese (Cantonese, Traditional)", "zh-HK"),
+    Language("Chinese (Mandarin, Traditional)", "zh-Hant"),
+    Language("Chinese (Mandarin, Traditional)", "zh-TW"),
+]
+
+ru_whisper_hallucinations_list = [
+    'ВЕСЕЛАЯ МУЗЫКА', 'СПОКОЙНАЯ МУЗЫКА', 'ГРУСТНАЯ МЕЛОДИЯ', 'ЛИРИЧЕСКАЯ МУЗЫКА', 'ДИНАМИЧНАЯ МУЗЫКА', 'ТАИНСТВЕННАЯ МУЗЫКА', 'ТОРЖЕСТВЕННАЯ МУЗЫКА', 'ИНТРИГУЮЩАЯ МУЗЫКА', 'НАПРЯЖЕННАЯ МУЗЫКА', 'ПЕЧАЛЬНАЯ МУЗЫКА', 'ТРЕВОЖНАЯ МУЗЫКА', 'МУЗЫКАЛЬНАЯ ЗАСТАВКА', 'ПЕРЕСТРЕЛКА', 'ГУДОК ПОЕЗДА', 'РЁВ МОТОРА', 'ШУМ ДВИГАТЕЛЯ', 'СИГНАЛ АВТОМОБИЛЯ', 'ЛАЙ СОБАК', 'ПЕС ЛАЕТ', 'КАШЕЛЬ', 'ВЫСТРЕЛЫ', 'ШУМ ДОЖДЯ', 'ПЕСНЯ', 'ПО ГРОМКОГОВОРИЧЕСКОМ ЯЗЫКЕ', 'ПО ГРОМКОГОВОРИТЕЛЮ', 'ВЗРЫВ', 'ШУМ МОТОРА', 'ПЛЕСК ВОДЫ', 'ГУДОК АВТОМОБИЛЯ', 'ЛАЙ СОБАКИ', 'ПО ТВ.', 'АПЛОДИСМЕНТЫ', 'ГОРОДСКОЙ ШУМ', 'ПОЛИЦИЯ', 'ГОРОДСКОЙ ГУДОК', 'СИГНАЛ МАШИНЫ', 'СМЕХ', 'СТУК В ДВЕРЬ', 'ААААААААААААААААААААА', 'ШУМ ДОЖДЯ', 'ПОЛИЦЕЙСКАЯ СИРЕНА', 'ЗВОНОК В ДВЕРЬ', 'Спасибо за субтитры!', 'Субтитры добавил DimaTorzok', 'Субтитры подогнал «Симон»!', 'Редактор субтитров М.Лосева Корректор А.Егорова', 'Редактор субтитров А.Синецкая Корректор А.Егорова', 'Редактор субтитров Т.Горелова Корректор А.Егорова', 'Редактор субтитров Е.Жукова Корректор А.Егорова', 'Редактор субтитров А.Семкин Корректор А.Егорова', 'Редактор субтитров А.Захарова Корректор А.Егорова', 'Смотрите продолжение во второй части видео.', 'Смотрите продолжение в следующей части.', 'Смотрите продолжение в следующей части видео.', 'Смотрите продолжение в 4 части видео.', 'Смотрите продолжение в следующей серии...', 'Смотрите продолжение во второй части.', 'Продолжение следует...', 'ПОДПИШИСЬ НА КАНАЛ', 'ПОДПИШИСЬ!', 'ПОДПИШИСЬ', 'Поехали!', 'Поехали.', 'Девушки отдыхают...', '🤔', '🤨', '😎', '💥', '🦜', 'Субтитры от Расследования Авиакатастроф.'
+]
+
+class ModelPreferences:
+    def __init__(self, supported_languages: List[str] = [], supported_feutures: SupportedFeatures = SupportedFeatures()):
+        self.supported_languages = supported_languages
+        self.supported_feutures = supported_feutures
+
+class Model:
+    def __init__(self, name: str, api_name: str, preferences: ModelPreferences = ModelPreferences()):
+        self.name = name
+        self.api_name = api_name
+        self.preferences = preferences
+
+class SpeechToTextPlugin(BasePlugin):   
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+
+    def on_send_message_hook(self, account, params) -> HookResult:
+        if not params or not is_voice(params.document):
+         return HookResult()
+       
+        run_on_queue(lambda: self.transcribe_voice(params))
+        return HookResult()
+    
+    def transcribe_voice(self, params):
+        api_key = self.get_setting("api_key", "34b586f466ec440565d8b7973c0bdfbfc8d425e0")
+
+        try:
+            with open(params.path, "rb") as f:
+                audio_data = f.read()
+
+            model = self.models[self.get_setting("model", 0)]
+            language = model.preferences.supported_languages[self.get_setting('language', 0)]
+            additional_params = "&".join(f"{k}={str(self.get_setting(k, False)).lower()}" for k, v in model.preferences.supported_feutures.__dict__.items())
+            url = (
+                f"https://api.deepgram.com/v1/listen"
+                f"?model={model.api_name}"
+                f"&language={language}&"
+                + additional_params
+            )
+            
+            headers = {
+                "Authorization": f"Token {api_key}",
+                "Content-Type": params.document.mime_type
+            }
+
+            self.log(f"Requesting {url}")
+            
+            try:
+                response = requests.post(url, headers=headers, data=audio_data, timeout=30)
+                response.raise_for_status()
+            except requests.exceptions.Timeout as e:
+                BulletinHelper.show_error(strings["TIMEOUT_ERROR"])
+                self.log("Request timed out (30s)")
+            except requests.exceptions.HTTPError as e:
+                self.log(f"Http error ({e})")
+            except requests.exceptions.RequestException as e:
+                self.log(f"Request error: {e}")
+            result = response.json()
+            
+            
+            try:
+                text: str = result['results']['channels'][0]['alternatives'][0]['transcript']
+            except IndexError:
+                text = None
+            
+            if (not text):
+                return
+            
+            if (self.get_setting("whisper_filter", False)): 
+                for hallucination in ru_whisper_hallucinations_list:
+                    text = text.replace(hallucination, "")
+            
+            if (text == ""):
+                return
+            
+            self.log('Voice transcripted successfuly: ' + text)
+            def after_got_messages(messages):
+                def from_id(msg) -> int:
+                    return msg.from_id.user_id or msg.from_id.chat_id or msg.from_id.channel_id
+
+                message = next(msg for msg in messages if msg.media and msg.media.document and from_id(msg) == get_user_config().getCurrentUser().id and is_voice(msg.media.document))
+                self.edit_message(
+                        text,
+                        params.peer,
+                        message.id
+                    )
+            
+            self.get_messages(
+                params.peer,
+                lambda messages: after_got_messages(messages))
+        except Exception as e:
+            self.log(strings["ERROR"] + " (line " + str(e.__traceback__.tb_lineno) + "): " + str(e))
+
+    def edit_message(self, text: str, peer: int, message_id: int, quote: bool = True):
+        req = TLRPC.TL_messages_editMessage()
+        req.peer = get_messages_controller().getInputPeer(peer)
+        req.id = message_id
+        req.message = text
+        
+        if quote:
+            quote = TLRPC.TL_messageEntityBlockquote()
+            quote.offset = 0
+            quote.length = len(text)
+            quote.collapsed = True
+            
+            entities = ArrayList()
+            entities.add(quote)
+            
+            req.entities = entities
+            req.flags |= 1 << 3
+            
+        req.flags |= 1 << 11
+        send_request(req, RequestCallback(self.request_error_handler))
+        
+    # Позаимствовано из zwyLib
+    def get_messages(self, peer, callback):
+        def get_message_callback(response, error):
+            if error or not response:
+                self.request_error_handler(response, error)
+                return
+
+            messages = jarray_to_array(cast(TLRPC.messages_Messages, response).messages)
+            callback(messages)
+
+        def send():
+            send_request(req, get_message_callback)
+        
+        req = TLRPC.TL_messages_getHistory()
+        req.peer = get_messages_controller().getInputPeer(peer)
+        req.offset_id = 0
+        req.limit = 50
+        
+        run_on_ui_thread(send)
+            
+    def request_error_handler(self, response, error):
+        if (error):
+            BulletinHelper.show_error(strings["ERROR"] + ": " + error.text)
+
+    whisper_preferences = ModelPreferences(
+        supported_languages = ['af', 'am', 'ar', 'as', 'az', 'ba', 'be', 'bg', 'bn', 'bo', 'br', 'bs', 'ca', 'cs', 'cy', 'da', 'de', 'el', 'en', 'es', 'et', 'eu', 'fa', 'fi', 'fo', 'fr', 'gl', 'gu', 'ha', 'haw', 'he', 'hi', 'hr', 'ht', 'hu', 'hy', 'id', 'is', 'it', 'ja', 'jw', 'ka', 'kk', 'km', 'kn', 'ko', 'la', 'lb', 'ln', 'lo', 'lt', 'lv', 'mg', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my', 'ne', 'nl', 'nn', 'no', 'oc', 'pa', 'pl', 'ps', 'pt', 'ro', 'ru', 'sa', 'sd', 'si', 'sk', 'sl', 'sn', 'so', 'sq', 'sr', 'su', 'sv', 'sw', 'ta', 'te', 'tg', 'th', 'tk', 'tl', 'tr', 'tt', 'uk', 'ur', 'uz', 'vi', 'yi', 'yo', 'zh'],
+        supported_feutures=SupportedFeatures())
+
+    nova_supported_languages = [
+        'bg', 'ca', 'cs', 'da', 'da-DK', 'de', 'de-CH', 'el',
+        'en', 'en-US', 'en-AU', 'en-GB', 'en-NZ', 'en-IN',
+        'es', 'es-419', 'et', 'fi', 'fr', 'fr-CA', 'hi', 'hu',
+        'id', 'it', 'ja', 'ko', 'ko-KR', 'lt', 'lv', 'ms', 'multi',
+        'nl', 'nl-BE', 'no', 'pl', 'pt', 'pt-BR', 'pt-PT', 'ro',
+        'ru', 'sk', 'sv', 'sv-SE', 'th', 'th-TH', 'tr', 'uk', 'vi',
+        'zh', 'zh-CN', 'zh-Hans', 'zh-HK', 'zh-TW', 'zh-Hant'
+    ]
+
+    base_supported_languages = ['da', 'de', 'en', 'en-US', 'es-419', 'es-LATAM', 'fr', 'fr-CA', 'hi', 'hi-Latn', 'id', 'it', 'ja', 'ko', 'nl', 'nl', 'no', 'pl', 'pt', 'pt-BR', 'pt-PT', 'ru', 'sv', 'taq', 'tr', 'uk', 'zh', 'zh-CN', 'zh-TW']
+
+    models: List[Model] = [
+        Model("Nova 2", "nova-2", ModelPreferences(supported_languages=nova_supported_languages, supported_feutures=SupportedFeatures(profanity_filter=False))),
+        Model("Nova 3", "nova-3", ModelPreferences(supported_languages=['multi', 'en', 'en-US'], supported_feutures=SupportedFeatures(profanity_filter=False,filler_words=False))),
+        Model("Base", "base", ModelPreferences(supported_languages=base_supported_languages, supported_feutures=SupportedFeatures(filler_words=False))),
+        Model("Whisper Tiny", "whisper-tiny", whisper_preferences),
+        Model("Whisper Small", "whisper-small", whisper_preferences),
+        Model("Whisper", "whisper", whisper_preferences),
+        Model("Whisper Large", "whisper-large", whisper_preferences),
+        Model(strings["MODEL_CUSTOM_TEXT"], "custom", ModelPreferences(supported_languages=list(map(lambda x: x.code, languages)), supported_feutures=SupportedFeatures(profanity_filter=False,filler_words=False)))
+        ]
+    
+    def create_settings(self):
+        try:     
+            self.models[7].api_name = self.get_setting("model", "whisper")
+                            
+            api_settings = [
+                Settings.Header(strings["SETTINGS_HEADER_TEXT"]),
+                Settings.Input(
+                    key="api_key",
+                    text=strings["API_KEY_TEXT"],
+                    default="34b586f466ec440565d8b7973c0bdfbfc8d425e0",
+                    subtext=strings["API_KEY_DESCRIPTION"],
+                    icon = "msg_pin_code"
+                ),
+                Settings.Selector(
+                    key="model",
+                    text=strings["MODEL_TEXT"],
+                    default=6,
+                    items=list(map(lambda x: x.name, self.models)),
+                    icon="msg_bot"
+                ),
+            ]
+            
+            selected_model: int = self.get_setting("model", 0)
+            model: Model = self.models[selected_model]
+            if selected_model == 7:
+                api_settings.append(Settings.Input(
+                    key="model_name",
+                    text=strings["MODEL_CUSTOM_TEXT"],
+                    default="whisper",
+                    subtext=strings["MODEL_CUSTOM_DESCRIPTION"],
+                ))
+            
+            if model.preferences.supported_languages.__len__() > 0:
+                items = list(filter(lambda x: x.code in model.preferences.supported_languages, languages))
+            else:
+                items = languages
+            
+            language_index = self.get_setting("language", 0)
+            if (language_index >= items.__len__()):
+                language_index = 0
+                self.set_setting("language", 0)
+                return None
+            current_language_code = items[language_index].code
+            lang_obj: Language = next((x for x in languages if x.code == current_language_code), None)
+
+            if (lang_obj is None):
+                lang_obj = languages[0]
+            
+            items = list(map(lambda x: x.name, items))
+                
+            model_settings = [
+                Settings.Header(strings["MODEL_SETTINGS_HEADER_TEXT"]),
+                Settings.Selector(
+                    key="language",
+                    text=strings["LANGUAGE_TEXT"],
+                    default=0,
+                    items=items,
+                    icon = "msg_language"
+                ),
+                Settings.Divider()
+            ]
+            
+            lang_supported_features = lang_obj.supported_features.__dict__ if lang_obj else None
+            model_features = model.preferences.supported_feutures.__dict__
+            model_settings = model_settings + list(
+                map(
+                    lambda x: Settings.Switch(key=x, text=x, default=False),
+                    filter(
+                        lambda x: model_features.get(x) is True and lang_supported_features.get(x) is True,
+                        model_features
+                    )
+                )
+            )
+            
+            if (model.api_name.__contains__("whisper") and current_language_code == "ru"):
+                model_settings.append(
+                    Settings.Switch(key="whisper_filter", text=strings["WHISPER_FILTER_TEXT"], default=True, subtext=strings["WHISPER_FILTER_DESCRIPTION"], icon = "filter_edit")
+                )
+            
+            settings = api_settings + model_settings  
+            return settings
+        except Exception as e:
+            self.log("Settings error. (line " + str(e.__traceback__.tb_lineno) + "): " + str(e))
+            return None

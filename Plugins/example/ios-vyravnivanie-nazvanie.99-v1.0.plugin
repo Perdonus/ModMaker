@@ -1,0 +1,251 @@
+"""
+╭─────────────────────────────────────────────────────────────╮
+│                                                             │
+│  ███╗   ███╗ █████╗ ███╗   ██╗██████╗ ██████╗ ███████╗      │
+│  ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔════╝      │
+│  ██╔████╔██║███████║██╔██╗ ██║██║  ██║██████╔╝█████╗        │
+│  ██║╚██╔╝██║██╔══██║██║╚██╗██║██║  ██║██╔══██╗██╔══╝        │
+│  ██║ ╚═╝ ██║██║  ██║██║ ╚████║██████╔╝██║  ██║███████╗      │
+│  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚══════╝      │
+│                                                             │
+│         █████╗ ██╗                                          │
+│        ██╔══██╗██║    ╭───────────────────╮                 │
+│        ███████║██║    │© 2024-2025        │                 │
+│        ██╔══██║██║    │Licensed Product   │                 │
+│        ██║  ██║██║    │All Rights Reserved│                 │
+│        ╚═╝  ╚═╝╚═╝    ╰───────────────────╯                 │
+│                                                             │
+│  ╭───────────────────────────────────────────────────────╮  │
+│  │ Unauthorized use, reproduction or distribution        │  │
+│  │ of this software is strictly prohibited               │  │
+│  ╰───────────────────────────────────────────────────────╯  │
+│                                                             │
+╰─────────────────────────────────────────────────────────────╯
+
+"""
+# -*- coding: utf-8 -*-
+#
+#   ╱|、
+#  (˚ˎ 。7  
+#   |、˜〵          
+#  じしˍ,)ノ
+# сгенерировано в MandreAI - @MandreAI_bot
+
+import traceback
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class, get_private_field
+from android_utils import run_on_ui_thread
+from java.util import Locale
+
+# Динамически находим необходимые классы Android и Telegram
+AndroidUtilities = find_class("org.telegram.messenger.AndroidUtilities")
+ChatActivity = find_class("org.telegram.ui.ChatActivity")
+ChatAvatarContainer = find_class("org.telegram.ui.Components.ChatAvatarContainer")
+BackupImageView = find_class("org.telegram.ui.Components.BackupImageView")
+ActionBar = find_class("org.telegram.ui.ActionBar.ActionBar")
+
+# UI-классы для layouts и views
+FrameLayout = find_class("android.widget.FrameLayout")
+Gravity = find_class("android.view.Gravity")
+View = find_class("android.view.View")
+
+
+__id__ = "centered_chat_header_mod_v2"
+__name__ = "CherificatorIOS"
+__description__ = "Идеально выравнивает заголовок чата, перемещает аватар на кнопку меню и исправляет анимацию клика."
+__author__ = "MandreAI & СвагаНеТута\n@swagnonher & @MandreAI_bot"
+__version__ = "1.0"
+__min_version__ = "11.9.0"
+__icon__ = "filled_chatlist2"
+
+
+class ActionBarHook(MethodHook):
+    """
+    Класс-хук для перехвата и модификации ActionBar в ChatActivity.
+    """
+    PROCESSED_TAG_KEY = 0x7E0D0001
+    CLONED_AVATAR_TAG_KEY = 0x7E0D0002
+
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
+
+    def after_hooked_method(self, param):
+        run_on_ui_thread(lambda: self.rearrange_action_bar_layout(param), delay=50)
+
+    def rearrange_action_bar_layout(self, param):
+        """Перестраивает макет ActionBar для центрирования элементов."""
+        try:
+            chat_activity = param.thisObject
+            action_bar = chat_activity.getActionBar()
+
+            avatar_container = self.find_view_by_class(action_bar, "org.telegram.ui.Components.ChatAvatarContainer")
+            if not avatar_container: return
+
+            original_avatar_view = get_private_field(avatar_container, "avatarImageView")
+            title_view = get_private_field(avatar_container, "titleTextView")
+            subtitle_view = get_private_field(avatar_container, "subtitleTextView")
+            text_container = title_view.getParent() if title_view else None
+
+            if not all([original_avatar_view, title_view, subtitle_view, text_container]): return
+
+            in_selection_mode = self.is_in_selection_mode(action_bar)
+            
+            if action_bar.getTag(self.PROCESSED_TAG_KEY):
+                cloned_avatar_pg = action_bar.findViewWithTag(self.CLONED_AVATAR_TAG_KEY)
+                if cloned_avatar_pg:
+                    drawable = original_avatar_view.getImageReceiver().getDrawable()
+                    if drawable: cloned_avatar_pg.setImageDrawable(drawable)
+                    cloned_avatar_pg.setVisibility(View.GONE if in_selection_mode else View.VISIBLE)
+                
+                text_container.setVisibility(View.VISIBLE if not in_selection_mode else View.GONE)
+                return
+
+            original_avatar_view.setVisibility(View.GONE)
+
+            if not in_selection_mode:
+                cloned_avatar_pg = BackupImageView(chat_activity.getParentActivity())
+                cloned_avatar_pg.setTag(self.CLONED_AVATAR_TAG_KEY, True)
+                
+                drawable = original_avatar_view.getImageReceiver().getDrawable()
+                if drawable: cloned_avatar_pg.setImageDrawable(drawable)
+                
+                avatar_size_dp_pg = 42
+                avatar_corner_radius_dp_pg = 21
+
+                size = AndroidUtilities.dp(avatar_size_dp_pg)
+                cloned_avatar_pg.setRoundRadius(AndroidUtilities.dp(avatar_corner_radius_dp_pg))
+                
+                lp = FrameLayout.LayoutParams(size, size)
+                lp.gravity = Gravity.END | Gravity.CENTER_VERTICAL
+                lp.rightMargin = AndroidUtilities.dp(4)
+                action_bar.addView(cloned_avatar_pg, lp)
+
+                # Смещаем аватар, чтобы он закрывал три точки
+                cloned_avatar_pg.setTranslationY(AndroidUtilities.dp(0)) # Смещение вниз
+                cloned_avatar_pg.setTranslationX(AndroidUtilities.dp(0))  # Смещение влево
+                
+                cloned_avatar_pg.setClickable(False)
+                cloned_avatar_pg.setFocusable(False)
+                
+                if hasattr(cloned_avatar_pg, 'setDescendantFocusability'):
+                    cloned_avatar_pg.setDescendantFocusability(0x60000)
+
+            if in_selection_mode:
+                text_container.setVisibility(View.GONE)
+            else:
+                text_container.setVisibility(View.VISIBLE)
+                
+                text_lp = text_container.getLayoutParams()
+                if isinstance(text_lp, FrameLayout.LayoutParams):
+                    text_lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+                    text_lp.gravity = Gravity.CENTER
+                    avatar_space = AndroidUtilities.dp(48)
+                    text_lp.leftMargin = AndroidUtilities.dp(49) # Сдвиг влево для идеального центра
+                    text_lp.rightMargin = avatar_space
+                    text_container.setLayoutParams(text_lp)
+                
+                if hasattr(title_view, 'setGravity'): 
+                    title_view.setGravity(Gravity.CENTER)
+                if hasattr(subtitle_view, 'setGravity'): 
+                    subtitle_view.setGravity(Gravity.CENTER)
+
+            action_bar.setTag(self.PROCESSED_TAG_KEY, True)
+            action_bar.requestLayout()
+            self.plugin.log(f"Header layout successfully realigned for chat: {chat_activity.getDialogId()}")
+
+        except Exception:
+            self.plugin.log(f"Error rearranging action bar layout:\n{traceback.format_exc()}")
+
+    def is_in_selection_mode(self, action_bar):
+        try:
+            menu = get_private_field(action_bar, "menu")
+            if menu and hasattr(menu, 'size') and menu.size() > 3:
+                return True
+            
+            title = action_bar.getTitle() if hasattr(action_bar, 'getTitle') else None
+            if title and (str(title).isdigit() or "selected" in str(title).lower()):
+                return True
+                
+            subtitle = action_bar.getSubtitle() if hasattr(action_bar, 'getSubtitle') else None
+            if subtitle and ("selected" in str(subtitle).lower()):
+                return True
+                
+            return False
+        except Exception:
+            return False
+
+    def find_view_by_class(self, root_view: View, class_name: str) -> View:
+        TargetClass = find_class(class_name)
+        if not TargetClass or not hasattr(root_view, 'getChildCount'): return None
+        for i in range(root_view.getChildCount()):
+            child = root_view.getChildAt(i)
+            if isinstance(child, TargetClass):
+                return child
+        return None
+
+class ActionBarStateHook(MethodHook):
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
+
+    def after_hooked_method(self, param):
+        run_on_ui_thread(lambda: self.update_layout_for_state_change(param), delay=100)
+
+    def update_layout_for_state_change(self, param):
+        try:
+            action_bar = param.thisObject
+            cloned_avatar = action_bar.findViewWithTag(ActionBarHook.CLONED_AVATAR_TAG_KEY)
+            if cloned_avatar:
+                in_selection_mode = self.is_in_selection_mode(action_bar)
+                cloned_avatar.setVisibility(View.GONE if in_selection_mode else View.VISIBLE)
+        except Exception:
+            self.plugin.log(f"Error updating layout for state change:\n{traceback.format_exc()}")
+
+    def is_in_selection_mode(self, action_bar):
+        try:
+            title = action_bar.getTitle() if hasattr(action_bar, 'getTitle') else None
+            if title and (str(title).isdigit() or "selected" in str(title).lower()):
+                return True
+            return False
+        except Exception:
+            return False
+
+class CenteredChatHeaderPlugin(BasePlugin):
+    """
+    Главный класс плагина.
+    """
+    def __init__(self):
+        super().__init__()
+        self.action_bar_hook_ref = None
+        self.action_bar_state_hook_ref = None
+
+    def on_plugin_load(self):
+        try:
+            on_resume_method = ChatActivity.getClass().getDeclaredMethod("onResume")
+            self.action_bar_hook_ref = self.hook_method(on_resume_method, ActionBarHook(self))
+            if self.action_bar_hook_ref: 
+                self.log("Успешно применен хук на ChatActivity.onResume()")
+            else: 
+                self.log("Не удалось применить хук на ChatActivity.onResume()")
+
+            try:
+                set_title_method = ActionBar.getClass().getDeclaredMethod("setTitle", find_class("java.lang.CharSequence"))
+                self.action_bar_state_hook_ref = self.hook_method(set_title_method, ActionBarStateHook(self))
+                if self.action_bar_state_hook_ref:
+                    self.log("Успешно применен хук на ActionBar.setTitle()")
+            except Exception as e:
+                self.log(f"Не удалось применить хук на ActionBar.setTitle(): {e}")
+
+        except Exception:
+            self.log(f"Не удалось применить хуки на ChatActivity:\n{traceback.format_exc()}")
+
+    def on_plugin_unload(self):
+        if self.action_bar_hook_ref:
+            self.unhook_method(self.action_bar_hook_ref)
+            self.log("Отключен хук с ChatActivity.onResume()")
+        if self.action_bar_state_hook_ref:
+            self.unhook_method(self.action_bar_state_hook_ref)
+            self.log("Отключен хук с ActionBar.setTitle()")
+    
+    def create_settings(self):
+        # Настройки удалены по запросу пользователя.
+        return None

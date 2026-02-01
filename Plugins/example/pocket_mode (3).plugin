@@ -1,0 +1,121 @@
+__id__ = "pocket_mode"
+__name__ = "Pocket Mode"
+__description__ = "Защита от случайной отправки сообщений, когда телефон находится в кармане."
+__author__ = "@swagnonher"
+__version__ = "1.0"
+__icon__ = "lock_outline"
+__dependencies__ = ["mandre_lib"]
+
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from ui.bulletin import BulletinHelper
+import traceback
+
+try:
+    from mandre_lib import Mandre
+except ImportError:
+    Mandre = None
+
+class PocketModePlugin(BasePlugin):
+    def on_plugin_load(self):
+        if not Mandre:
+            self.log("Ошибка: MandreLib не установлен.")
+            return
+        
+        Mandre.use_persistent_storage(self)
+
+        self.is_in_pocket = False
+        self._restart_sensor_system()
+        self.add_on_send_message_hook()
+        self.log("Pocket Mode: Защита активирована.")
+
+    def on_plugin_unload(self):
+        if Mandre:
+            Mandre.Sensors.stop_all()
+
+    def _restart_sensor_system(self):
+        Mandre.Sensors.stop_all()
+        
+        custom_id_str = self.get_setting("custom_sensor_id", "0")
+        try:
+            custom_id = int(custom_id_str)
+        except:
+            custom_id = 0
+
+        if custom_id > 0:
+            Mandre.Sensors.set_override(8, custom_id)
+        else:
+            Mandre.Sensors.set_override(8, 8)
+
+        if self.get_setting("active", True):
+            try:
+                Mandre.Sensors.listen_proximity(self._on_sensor_data)
+            except Exception as e:
+                self.log(f"Ошибка запуска сенсора: {e}")
+
+    def create_settings(self):
+        return Mandre.Settings.render(self, f"""
+            <header text="Основные настройки" align="center" />
+            <switch key="active" text="Включить защиту" subtext="Блокировать отправку в кармане" default="true" icon="proxy_on_solar" />
+            <switch key="visual_feedback" text="Визуальный статус" subtext="Показывать уведомление при закрытии датчика" default="true" icon="msg_info" />
+
+            <header text="Настройка оборудования" align="center" />
+            <text text="Если по умолчанию не работает" subtext_color="windowBackgroundWhiteGrayText" subtext="шаг 1: сканировать датчики, шаг 2: применить новый ID" />
+            
+            <input key="custom_sensor_id" text="ID Датчика" subtext="0 = Автоматически. Или введите ID вручную." default="0" icon="hardware_cpu_solar" />
+            
+            <button text="Применить новый ID" icon="msg_retry" on_click="apply_id" />
+            <button text="🔍 Сканировать датчики в лог" icon="msg_search" on_click="scan_sensors" />
+        """)
+
+    def scan_sensors(self):
+        sensors = Mandre.Sensors.get_all_sensors_info()
+        self.log("=== SCANNING SENSORS ===")
+        found_candidate = None
+        
+        for s in sensors:
+            sid = s.get('id')
+            name = s.get('name', 'Unknown')
+            is_prox = "prox" in name.lower() or "distance" in name.lower() or "tmd" in name.lower()
+            
+            prefix = "✅ " if is_prox else "▪️ "
+            self.log(f"{prefix}ID: {sid} | Name: {name}")
+            
+            if is_prox and not found_candidate:
+                found_candidate = sid
+
+        if found_candidate:
+            self.set_setting("custom_sensor_id", str(found_candidate))
+            Mandre.apply_and_refresh_settings(self)
+            BulletinHelper.show_success(f"Найден и подставлен ID: {found_candidate}")
+        else:
+            BulletinHelper.show_info("Сканирование завершено. См. логи.")
+
+    def apply_id(self):
+        self._restart_sensor_system()
+        BulletinHelper.show_success("Настройки сенсора применены")
+
+    def _on_sensor_data(self, data):
+        raw_val = data.get("cm", 0.0)
+
+        is_near = (raw_val < 1.0) 
+        
+        if self.is_in_pocket != is_near:
+            self.is_in_pocket = is_near
+
+            if self.get_setting("visual_feedback", True):
+                state = "🟥 ЗАКРЫТ (Блок)" if is_near else "🟩 ОТКРЫТ"
+                BulletinHelper.show_info(f"Датчик: {state}")
+
+    def on_send_message_hook(self, *args):
+        try:
+            if not self.get_setting("active", True):
+                return HookResult()
+
+            if self.is_in_pocket:
+                BulletinHelper.show_error("🚫 Защита от кармана: Отправка отменена")
+                return HookResult(strategy=HookStrategy.CANCEL)
+
+            return HookResult()
+            
+        except Exception:
+            return HookResult()

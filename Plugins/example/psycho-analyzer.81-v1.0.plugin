@@ -1,0 +1,289 @@
+"""
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║  ███╗   ███╗ █████╗ ███╗   ██╗██████╗ ██████╗ ███████╗       ║
+║  ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔════╝       ║
+║  ██╔████╔██║███████║██╔██╗ ██║██║  ██║██████╔╝█████╗         ║
+║  ██║╚██╔╝██║██╔══██║██║╚██╗██║██║  ██║██╔══██╗██╔══╝         ║
+║  ██║ ╚═╝ ██║██║  ██║██║ ╚████║██████╔╝██║  ██║███████╗       ║
+║  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚══════╝       ║
+║                                                              ║  
+║         █████╗ ██╗                                           ║
+║        ██╔══██╗██║                                           ║
+║        ███████║██║    © 2024-2025                            ║
+║        ██╔══██║██║    Licensed Product                       ║
+║        ██║  ██║██║    All Rights Reserved                    ║
+║        ╚═╝  ╚═╝╚═╝                                           ║
+║                                                              ║
+║    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░║
+║    ░ Unauthorized use, reproduction or distribution ░        ║
+║    ░ of this software is strictly prohibited        ░        ║
+║    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+
+# coding: utf-8
+# сделал эту парашу нейронкой и не скрываю
+# Метаданные плагина
+__id__ = "psycho_analyzer"
+__name__ = "Psycho Analyzer"
+__description__ = "Публикует многотомное психологическое исследование пользователя на Telegra.ph. Команда: .psyanal <ID>"
+__author__ = "СВАГАНЕТУТА"
+__version__ = "1.0.0" # Версия 'Искупление'
+__min_version__ = "11.9.1"
+__icon__ = "AltyPlugIcons/2"
+
+# --- Импорты ---
+import json
+import traceback
+import requests
+import math
+
+# Библиотеки Exteragram и AltyLib
+import altylib as alty
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from ui.settings import Header, Input, Divider
+from client_utils import run_on_queue, send_request, RequestCallback, get_messages_controller, send_message, get_user_config
+from android_utils import run_on_ui_thread
+
+# Java-классы Telegram API
+try:
+    from org.telegram.tgnet import TLRPC
+except ImportError:
+    # ИСПРАВЛЕНИЕ: Каждое определение класса на новой строке
+    class TLRPC:
+        class TL_messages_search: pass
+        class TL_inputMessagesFilterEmpty: pass
+        class TL_inputPeerUser: pass
+        class TL_users_getFullUser: pass
+        class TL_users_userFull: pass
+
+# --- Настройки по умолчанию ---
+DEFAULT_MESSAGE_LIMIT = 300
+DEFAULT_MODEL = "gemini-1.5-flash-latest"
+DEFAULT_EMPTY_CYCLE_LIMIT = 20
+TELEGRAPH_API_ENDPOINT = "https://api.telegra.ph/"
+TELEGRAPH_CHAR_LIMIT = 60000 
+GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+
+class PsychoAnalyzer(BasePlugin):
+    def create_settings(self):
+        try:
+            return [
+                Header(text="Настройки Gemini API"),
+                Input(key="api_key", text="API ключ", subtext="aistudio.google.com/app/apikey", default="", icon="msg_password"),
+                Input(key="model_name", text="Название модели", subtext=f"По умолчанию: {DEFAULT_MODEL}", default=DEFAULT_MODEL, icon="msg_bot"),
+                Divider(), Header(text="Настройки анализа"),
+                Input(key="message_limit", text="Лимит сообщений", subtext="Максимум сообщений для анализа.", default=str(DEFAULT_MESSAGE_LIMIT), icon="msg_limit"),
+                Input(key="empty_cycle_limit", text="Лимит пустых прокруток", subtext=f"Остановить поиск, если за N прокруток не найдено ни одного сообщения. По умолч.: {DEFAULT_EMPTY_CYCLE_LIMIT}", default=str(DEFAULT_EMPTY_CYCLE_LIMIT), icon="msg_cancel"),
+                Input(key="telegraph_author", text="Автор публикаций Telegra.ph", subtext="Имя, которое будет указано как автор.", default="Psycho Analyzer Bot", icon="msg_user"),
+                Divider(text=f"Версия плагина: {__version__}")
+            ]
+        except Exception: alty.log(f"Ошибка при создании настроек: {traceback.format_exc()}"); return []
+
+    def on_plugin_load(self):
+        alty.log(f"Загрузка плагина '{__name__}' v{__version__}..."); alty.register_command("psyanal", self.cmd_psycho_anal, "Психоанализ сообщений")
+        self.add_on_send_message_hook(); alty.log(f"'{__name__}' загружен. Команда .psyanal активна.")
+
+    def on_send_message_hook(self, account, params):
+        res = alty.handle_outgoing_command(self, account, params); return res or HookResult()
+
+    def cmd_psycho_anal(self, _self_pl, args, params):
+        api_key = self.get_setting("api_key")
+        if not api_key: alty.bulletin_error("API ключ для Gemini не указан в настройках!"); return HookResult(strategy=HookStrategy.CANCEL)
+        try: target_user_id = int(args.replace('*', '').strip())
+        except (ValueError, TypeError): alty.bulletin_error("Неверный ID. Пример: .psyanal 123456789"); return HookResult(strategy=HookStrategy.CANCEL)
+        
+        alty.bulletin_success("✅ Исследование запущено!")
+        run_on_queue(lambda: self._get_full_user_info_then_search(target_user_id, params))
+        return HookResult(strategy=HookStrategy.CANCEL)
+
+    def _java_to_py_list(self, java_collection):
+        py_list = []
+        if java_collection is None: return py_list
+        it = java_collection.iterator()
+        while it.hasNext(): py_list.append(it.next())
+        return py_list
+
+    def _get_full_user_info_then_search(self, target_user_id, original_params):
+        try:
+            messages_controller = get_messages_controller()
+            target_user_base = messages_controller.getUser(target_user_id)
+            if target_user_base is None:
+                self._handle_error(f"Не удалось найти пользователя с ID {target_user_id} в кеше клиента."); return
+
+            req = TLRPC.TL_users_getFullUser(); req.id = messages_controller.getInputUser(target_user_base)
+
+            def on_full_user_received(response, error):
+                if error is not None: self._handle_error(f"Не удалось получить полную информацию о пользователе. Ошибка: {error.text}"); return
+                if not isinstance(response, TLRPC.TL_users_userFull): self._handle_error("Получен неверный ответ от сервера."); return
+                
+                py_user_list = self._java_to_py_list(response.users)
+                if not py_user_list: self._handle_error(f"Не удалось извлечь пользователя из ответа сервера."); return
+
+                user = py_user_list[0]; user_name = f"{user.first_name} {user.last_name or ''}".strip()
+                alty.log(f"Информация о {user_name} получена. Начинаю поиск.")
+                
+                self._search_recursive(
+                    chat_id=original_params.peer, target_user=user, user_name=user_name,
+                    limit_from_settings=int(self.get_setting("message_limit", str(DEFAULT_MESSAGE_LIMIT))),
+                    offset_id=0, collected_messages=[], original_params=original_params, empty_cycles=0)
+
+            send_request(req, RequestCallback(on_full_user_received))
+        except Exception as e: self._handle_error(f"Критическая ошибка на этапе получения пользователя: {traceback.format_exc()}")
+    
+    def _search_recursive(self, chat_id, target_user, user_name, limit_from_settings, offset_id, collected_messages, original_params, empty_cycles):
+        try:
+            max_empty_cycles = int(self.get_setting("empty_cycle_limit", str(DEFAULT_EMPTY_CYCLE_LIMIT)))
+            if empty_cycles >= max_empty_cycles:
+                alty.log(f"Защитный механизм сработал. Остановка."); self._finish_collection_and_analyze(collected_messages, target_user.id, user_name, original_params); return
+
+            run_on_ui_thread(lambda: alty.show_spinner(f"Поиск... Найдено {len(collected_messages)}/{limit_from_settings}..."))
+            req = TLRPC.TL_messages_search(); req.peer = get_messages_controller().getInputPeer(chat_id)
+            req.q = ""; req.filter = TLRPC.TL_inputMessagesFilterEmpty(); req.limit = 100; req.offset_id = offset_id
+            from_user_peer = TLRPC.TL_inputPeerUser(); from_user_peer.user_id = target_user.id
+            from_user_peer.access_hash = target_user.access_hash; req.from_id = from_user_peer
+
+            def on_search_complete(response, error):
+                if error is not None: self._handle_error(f"Ошибка при поиске: {error}"); return
+                py_messages_chunk = self._java_to_py_list(response.messages)
+                if not py_messages_chunk:
+                    alty.log("Поиск завершен: сервер не вернул сообщений."); self._finish_collection_and_analyze(collected_messages, target_user.id, user_name, original_params); return
+
+                new_offset_id = 0; found_in_chunk = 0
+                for msg in py_messages_chunk:
+                    new_offset_id = msg.id
+                    if hasattr(msg, "from_id") and msg.from_id and msg.from_id.user_id == target_user.id:
+                        if len(collected_messages) < limit_from_settings:
+                           if isinstance(getattr(msg, "message", None), str) and msg.message:
+                                collected_messages.append(msg.message); found_in_chunk += 1
+                
+                current_empty_cycles = empty_cycles + 1 if found_in_chunk == 0 else 0
+
+                if len(collected_messages) < limit_from_settings:
+                    self._search_recursive(chat_id, target_user, user_name, limit_from_settings, new_offset_id, collected_messages, original_params, current_empty_cycles)
+                else:
+                    alty.log(f"Достигнут лимит. Завершаем сбор."); self._finish_collection_and_analyze(collected_messages, target_user.id, user_name, original_params)
+
+            send_request(req, RequestCallback(on_search_complete))
+        except Exception as e: self._handle_error(f"Критическая ошибка в _search_recursive: {traceback.format_exc()}")
+            
+    def _finish_collection_and_analyze(self, messages, target_user_id, user_name, original_params):
+        if not messages: self._handle_error(f"Не удалось найти сообщения от пользователя {user_name}"); return
+        
+        alty.log(f"Сбор завершен. Всего {len(messages)} сообщений. Отправка в Gemini.")
+        text_to_analyze = "\n".join(messages); analysis_text = self._call_gemini_api(text_to_analyze)
+        if "❌" in analysis_text:
+            self._handle_error(analysis_text); return
+
+        self._upload_to_telegraph_and_send_link(analysis_text, target_user_id, user_name, original_params)
+
+    def _call_gemini_api(self, text_data):
+        run_on_ui_thread(lambda: alty.show_spinner("Создание психологического исследования..."))
+        api_key = self.get_setting("api_key"); model = self.get_setting("model_name", DEFAULT_MODEL)
+        url = GEMINI_API_ENDPOINT.format(model=model, api_key=api_key)
+        prompt = (
+            "ТЫ — команда мировых психоаналитиков и форензик-лингвистов. Твоя задача — составить КОМПЛЕКСНОЕ МНОГОАСПЕКТНОЕ ПСИХОЛОГИЧЕСКОЕ ИССЛЕДОВАНИЕ личности, "
+            "основываясь ИСКЛЮЧИТЕЛЬНО на предоставленной подборке сообщений. Твой анализ должен быть предельно детальным, глубоким и академичным. Твоя цель - создать исчерпывающий документ.\n\n"
+            "**СТРОЖАЙШИЕ ПРАВИЛА:**\n"
+            "1.  **НИКАКИХ СОВЕТОВ:** Категорически запрещено давать рекомендации, ставить диагнозы или предлагать решения. Твоя роль — беспристрастный исследователь.\n"
+            "2.  **ДЕТАЛИЗАЦИЯ:** Анализ должен быть максимально подробным. Приводи примеры из текста для подкрепления своих гипотез.\n"
+            "3.  **СТРУКТУРА:** Ответ ДОЛЖЕН СТРОГО СООТВЕТСТВОВАТЬ ШАБЛОНУ НИЖЕ, включая все пункты, форматирование Markdown и эмодзи.\n\n"
+            "**СТРУКТУРА ИССЛЕДОВАНИЯ:**\n"
+            "📝 **Краткая выжимка (Abstract):** (В одном-двух абзацах представь ключевые выводы исследования: доминирующие черты личности, стиль мышления и эмоциональные паттерны).\n\n"
+            "🗣️ **Лингвистические паттерны:** (Детальный анализ стиля речи: сложность предложений, использование специфической лексики, сленга, метафор, интонационные маркеры (восклицания, многоточия), частота использования определенных частей речи. Что это говорит о человеке?).\n\n"
+            "🎭 **Эмоциональная тональность и регуляция аффекта:** (Глубокий анализ эмоционального спектра. Какие эмоции выражаются открыто, а какие подавляются? Как человек справляется с фрустрацией, радостью, гневом? Есть ли признаки эмоциональной лабильности или, наоборот, ригидности?).\n\n"
+            "🧠 **Когнитивная обработка и мировоззрение:** (Анализ структуры мышления. Человек склонен к абстрактному или конкретному мышлению? Мышление аналитическое или интуитивное? Оптимист, пессимист или реалист? Как он аргументирует свою позицию?).\n\n"
+            "🤝 **Межличностная динамика:** (Как человек выстраивает отношения с другими, судя по его общению? Демонстрирует ли он эмпатию, склонность к доминированию, ведомости, сотрудничеству или избеганию? Как он воспринимает критику и похвалу?).\n\n"
+            "❤️ **Ключевые мотивации и ценности:** (Что движет этим человеком? Какие глубинные потребности и ценности прослеживаются в его сообщениях? Стремление к безопасности, признанию, знаниям, власти, свободе, принадлежности?).\n\n"
+            "🔥 **Потенциальные факторы стресса и механизмы совладания:** (Какие темы или ситуации, вероятно, вызывают у человека напряжение? Какие защитные механизмы (юмор, сарказм, отрицание, рационализация) он использует для совладания со стрессом?).\n\n"
+            "📜 **Синтез и заключение:** (Объедини все выводы в целостный психологический портрет, подчеркнув наиболее яркие и устойчивые черты личности).\n\n"
+            "<MESSAGES_FOR_ANALYSIS>\n"
+            f"{text_data}\n"
+            "</MESSAGES_FOR_ANALYSIS>\n\n"
+            "Приступай к исследованию."
+        )
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        alty.log("Отправка запроса в Gemini API...")
+        try:
+            response = requests.post(url, json=payload, timeout=240); response.raise_for_status()
+            alty.log("Получен успешный ответ от Gemini."); data = response.json(); return data['candidates'][0]['content']['parts'][0]['text']
+        except requests.exceptions.RequestException as e: return f"❌ **Сетевая ошибка при обращении к Gemini:**\n`{e}`"
+        except (KeyError, IndexError, json.JSONDecodeError) as e: alty.log(f"Ошибка парсинга ответа Gemini: {e}\nОтвет: {response.text}"); return f"❌ **Ошибка обработки ответа от Gemini.**"
+
+    def _upload_long_text_to_telegraph(self, text, user_name):
+        run_on_ui_thread(lambda: alty.show_spinner("Публикация исследования..."))
+        alty.log(f"Начинаю загрузку на Telegra.ph. Объем текста: {len(text)} символов.")
+        
+        parts = text.split('\n\n')
+        chunks = []; current_chunk = ""
+        for part in parts:
+            if len(current_chunk) + len(part) + 2 > TELEGRAPH_CHAR_LIMIT:
+                chunks.append(current_chunk)
+                current_chunk = part
+            else:
+                current_chunk += '\n\n' + part if current_chunk else part
+        chunks.append(current_chunk)
+        
+        total_pages = len(chunks); page_urls = []
+        author_name = self.get_setting("telegraph_author", "Psycho Analyzer Bot")
+
+        token = self.get_setting("telegraph_token")
+        if not token:
+            acc_resp = requests.post(f"{TELEGRAPH_API_ENDPOINT}createAccount", data={'short_name': 'PsychoAnalyzer'}).json()
+            if acc_resp.get('ok'):
+                token = acc_resp['result']['access_token']
+                self.set_setting("telegraph_token", token)
+            else:
+                return None, f"Не удалось создать аккаунт Telegra.ph: {acc_resp.get('error')}"
+
+        for i, chunk in enumerate(chunks):
+            run_on_ui_thread(lambda: alty.show_spinner(f"Публикация тома {i+1}/{total_pages}..."))
+            title = f"Исследование: {user_name} (Том {i+1}/{total_pages})"
+            
+            content_nodes = [{'tag': 'pre', 'children': [chunk.strip()]}]
+            page_payload = { 'access_token': token, 'title': title, 'author_name': author_name, 'content': json.dumps(content_nodes) }
+            page_resp = requests.post(f"{TELEGRAPH_API_ENDPOINT}createPage", data=page_payload).json()
+            
+            if page_resp.get('ok'):
+                page_urls.append(page_resp['result']['url'])
+                alty.log(f"Том {i+1} опубликован: {page_urls[-1]}")
+            else:
+                error_text = page_resp.get('error', 'Неизвестная ошибка')
+                return None, f"Не удалось опубликовать том {i+1}: {error_text}"
+        
+        return page_urls, None
+        
+    def _upload_to_telegraph_and_send_link(self, text, target_user_id, user_name, original_params):
+        page_urls, error = self._upload_long_text_to_telegraph(text, user_name)
+
+        if error:
+            alty.log(f"Критическая ошибка при загрузке на Telegra.ph: {error}")
+            alty.bulletin_error("❌ Не удалось загрузить на Telegra.ph! Отправляю часть анализа в чат.")
+            self._display_analysis_fallback(text, target_user_id, user_name, original_params)
+            return
+            
+        links_text = "\n".join([f"🔗 [Том {i+1}]({url})" for i, url in enumerate(page_urls)])
+        final_message = (
+            f"🔬 **Психологическое исследование готово.**\n\n"
+            f"**Объект:** {user_name} (ID: `{target_user_id}`)\n\n"
+            f"**Ссылки на полный анализ:**\n{links_text}"
+        )
+        
+        my_id = get_user_config().getClientUserId()
+        send_message({"peer": my_id, "message": final_message})
+        
+        alty.hide_spinner()
+        alty.bulletin_success("✅ Исследование готово! Результаты отправлены в ваши Избранные сообщения.")
+
+    def _display_analysis_fallback(self, text, target_user_id, user_name, original_params):
+        alty.hide_spinner()
+        header = f"🧠 **Психологический анализ пользователя:** {user_name} (ID: `{target_user_id}`)\n\n(Не удалось загрузить на Telegra.ph)\n\n"
+        final_message = header + text[:3000] + "\n\n..."
+        send_message({ "peer": original_params.peer, "message": final_message })
+
+    def _handle_error(self, error_text):
+        alty.log(f"!!! ОБРАБОТАНА ОШИБКА: {error_text}")
+        run_on_ui_thread(lambda: { alty.hide_spinner(), alty.bulletin_error(error_text) })

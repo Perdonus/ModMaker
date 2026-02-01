@@ -1,0 +1,273 @@
+__id__ = "custom_top_banner"
+__name__ = "CustomBanner"
+__author__ = "@RnPlugins with @PluginIDE"
+__version__ = "1.0.1r"
+__description__ = """Настраиваемый баннер сверху в списке чатов"""
+
+
+
+__icon__ = "sPluginIDE/0"
+__min_version__ = "11.12.0"
+
+import os
+import traceback
+from typing import List, Any
+
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class
+from client_utils import get_last_fragment, run_on_queue
+from android_utils import run_on_ui_thread, log
+from ui.settings import Header, Text, Divider
+from ui.bulletin import BulletinHelper
+
+from android.app import Activity
+from android.content import Intent
+from android.net import Uri
+from java.io import File, FileOutputStream, ByteArrayOutputStream
+from org.telegram.messenger import ApplicationLoader
+from java import jclass
+
+from android.graphics import BitmapFactory, Color
+from android.graphics.drawable import Drawable, BitmapDrawable, GradientDrawable, LayerDrawable, ColorDrawable
+from org.telegram.ui.ActionBar import Theme
+from android.view import Gravity
+from java import jarray, jint
+
+class CustomBannerPlugin(BasePlugin):
+    """
+    Плагин для установки кастомного изображения на верхнюю панель
+    в списке чатов с выбором файла через системный менеджер.
+    """
+    FILE_PICKER_REQUEST_CODE = 102
+    
+    class ActivityResultHook(MethodHook):
+        """Перехватывает результат выбора файла и самоуничтожается."""
+        def __init__(self, plugin_instance):
+            self.plugin = plugin_instance
+            
+        def before_hooked_method(self, param):
+            request_code, result_code, data = param.args
+            if request_code == self.plugin.FILE_PICKER_REQUEST_CODE:
+                log(f"[{self.plugin.id}] Перехвачен результат выбора файла!")
+                param.setResult(None) 
+                if result_code == Activity.RESULT_OK and data and data.getData():
+                    run_on_queue(lambda: self.plugin._handle_file_uri(data.getData()))
+                else:
+                    log(f"[{self.plugin.id}] Выбор файла отменен или не удался.")
+                if self.plugin.activity_hook:
+                    self.plugin.unhook_method(self.plugin.activity_hook)
+                    self.plugin.activity_hook = None
+                    log(f"[{self.plugin.id}] Временный хук onActivityResult успешно удален.")
+
+    class OnResumeHook(MethodHook):
+        """Применяет баннер при возобновлении главного экрана."""
+        def __init__(self, plugin):
+            self.plugin = plugin
+
+        def after_hooked_method(self, param):
+            try:
+                fragment = param.thisObject
+                if not hasattr(fragment, 'getActionBar'): return
+                action_bar = fragment.getActionBar()
+                if not action_bar: return
+
+                current_dims = self.plugin.get_setting("banner_dimensions", None)
+                action_bar_width, action_bar_height = action_bar.getWidth(), action_bar.getHeight()
+                if action_bar_width > 0 and action_bar_height > 0:
+                    new_dims = f"{action_bar_width}x{action_bar_height} px"
+                    if current_dims != new_dims:
+                        self.plugin._set_setting_compat("banner_dimensions", new_dims, reload=True)
+
+                if self.plugin.original_drawable is None:
+                    self.plugin.original_drawable = action_bar.getBackground()
+                if self.plugin.original_color is None:
+                    self.plugin.original_color = Theme.getColor(Theme.key_actionBarDefault)
+
+                image_path = self.plugin.get_setting("banner_internal_path", "")
+                if not image_path or not File(image_path).exists():
+                    if self.plugin.original_drawable is not None and self.plugin.original_color is not None:
+                        action_bar.setBackgroundDrawable(self.plugin.original_drawable)
+                        action_bar.setBackgroundColor(self.plugin.original_color)
+                    return
+
+                bitmap = BitmapFactory.decodeFile(image_path)
+                if not bitmap: return
+                
+                parent_activity = fragment.getParentActivity()
+                if not parent_activity: return
+                
+                image_drawable = BitmapDrawable(parent_activity.getResources(), bitmap)
+                image_drawable.setGravity(Gravity.FILL)
+                
+                gradient_colors = jarray(jint)([Color.TRANSPARENT, self.plugin.original_color])
+                gradient = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, gradient_colors)
+                scrim_drawable = ColorDrawable(0x4D000000)
+                
+                layers = jarray(Drawable)([image_drawable, scrim_drawable, gradient])
+                custom_drawable = LayerDrawable(layers)
+                
+                def apply_background_task():
+                    if get_last_fragment() == fragment:
+                        action_bar.setBackgroundColor(Color.TRANSPARENT)
+                        action_bar.setBackgroundDrawable(custom_drawable)
+                run_on_ui_thread(apply_background_task, delay=50)
+            except Exception as e:
+                log(f"[{self.plugin.id}] Ошибка в хуке onResume: {e}\n{traceback.format_exc()}")
+
+    def __init__(self):
+        super().__init__()
+        self.activity_hook = None
+        self.resume_hook_obj = None
+        self._plugin_dir_path = ""
+        self.original_drawable = None
+        self.original_color = None
+
+    def on_plugin_load(self):
+        try:
+            base_dir = ApplicationLoader.getFilesDirFixed()
+            if base_dir:
+                plugin_folder = File(base_dir, self.id)
+                if not plugin_folder.exists(): plugin_folder.mkdirs()
+                self._plugin_dir_path = plugin_folder.getAbsolutePath()
+        except Exception as e:
+            log(f"[{self.id}] Критическая ошибка при создании папки плагина: {e}")
+            return
+            
+        try:
+            main_screen_class_name = next((name for name in ["org.telegram.ui.DialogsActivity", "org.telegram.ui.MainActivity"] if find_class(name)), None)
+            if main_screen_class_name:
+                Class = jclass("java.lang.Class")
+                MainScreenClass = Class.forName(main_screen_class_name)
+                on_resume_method = MainScreenClass.getDeclaredMethod("onResume")
+                if on_resume_method:
+                    on_resume_method.setAccessible(True)
+                    self.resume_hook_obj = self.hook_method(on_resume_method, self.OnResumeHook(self))
+                else:
+                    log(f"[{self.id}] Метод onResume не найден в {main_screen_class_name}")
+        except Exception as e:
+            log(f"[{self.id}] Не удалось установить хук на onResume: {e}\n{traceback.format_exc()}")
+
+    def on_plugin_unload(self):
+        try:
+            fragment = get_last_fragment()
+            if fragment and self.original_drawable and hasattr(fragment, 'getActionBar'):
+                main_screen_names = ["org.telegram.ui.DialogsActivity", "org.telegram.ui.MainActivity"]
+                if fragment.getClass().getName() in main_screen_names:
+                    action_bar = fragment.getActionBar()
+                    if action_bar:
+                        action_bar.setBackgroundDrawable(self.original_drawable)
+                        if self.original_color is not None:
+                            action_bar.setBackgroundColor(self.original_color)
+                        else:
+                            action_bar.setBackgroundColor(Theme.getColor(Theme.key_actionBarDefault))
+                        log(f"[{self.id}] Восстановлен фон ActionBar при выгрузке.")
+        except Exception as e:
+            log(f"[{self.id}] Не удалось восстановить фон при выгрузке: {e}")
+
+    def create_settings(self) -> List[Any]:
+        file_path = self.get_setting("banner_internal_path", "")
+        file_info = os.path.basename(file_path) if file_path and os.path.exists(file_path) else "Изображение не выбрано"
+        dimensions_info = self.get_setting("banner_dimensions", "Размеры: (неизвестно)")
+        return [
+            Header(text="Настройка баннера"),
+            Text(text="Выбрать изображение", icon="msg_gallery", on_click=self._launch_file_picker),
+            Text(text="Удалить изображение", icon="msg_delete", red=True, on_click=self._delete_image),
+            Divider(text="Текущий файл"),
+            Text(text=file_info, icon="msg_info"),
+            Divider(text=dimensions_info)
+        ]
+
+    def _set_setting_compat(self, key: str, value: Any, reload: bool = False):
+        """Обертка для обратной совместимости set_setting."""
+        if not reload:
+            self.set_setting(key, value)
+            return
+        try:
+            self.set_setting(key, value, reload_settings=True)
+        except TypeError:
+            self.set_setting(key, value)
+
+
+
+    def _launch_file_picker(self, view=None):
+        try:
+            fragment = get_last_fragment()
+            if not fragment:
+                BulletinHelper.show_error("Не удалось получить текущий экран.")
+                return
+            activity = fragment.getParentActivity()
+            if not activity:
+                BulletinHelper.show_error("Не удалось получить родительский экран.")
+                return
+
+            if self.activity_hook: self.unhook_method(self.activity_hook)
+            
+            Class = jclass("java.lang.Class")
+            IntegerClass = jclass("java.lang.Integer")
+            IntentClass = jclass("android.content.Intent")
+            
+            ActivityClass = Class.forName(activity.getClass().getName())
+            method = ActivityClass.getDeclaredMethod("onActivityResult", IntegerClass.TYPE, IntegerClass.TYPE, IntentClass)
+            
+            if method:
+                method.setAccessible(True)
+                self.activity_hook = self.hook_method(method, self.ActivityResultHook(self))
+                log(f"[{self.id}] Временный хук на onActivityResult установлен.")
+            else:
+                log(f"[{self.id}] Не удалось найти метод onActivityResult.")
+                BulletinHelper.show_error("Внутренняя ошибка: метод не найден")
+                return
+
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("image/*")
+            activity.startActivityForResult(Intent.createChooser(intent, "Выберите изображение"), self.FILE_PICKER_REQUEST_CODE)
+        except Exception as e:
+            log(f"[{self.id}] Не удалось запустить выбор файла: {e}\n{traceback.format_exc()}")
+            BulletinHelper.show_error(f"Ошибка открытия: {e}")
+
+    def _handle_file_uri(self, uri: Uri):
+        input_stream, byte_stream, output_stream = None, None, None
+        try:
+            content_resolver = ApplicationLoader.applicationContext.getContentResolver()
+            input_stream = content_resolver.openInputStream(uri)
+            if not input_stream:
+                run_on_ui_thread(lambda: BulletinHelper.show_error("Не удалось открыть файл."))
+                return
+            byte_stream = ByteArrayOutputStream()
+            buffer = bytearray(4096)
+            bytes_read = input_stream.read(buffer)
+            while bytes_read != -1:
+                byte_stream.write(buffer, 0, bytes_read)
+                bytes_read = input_stream.read(buffer)
+            image_bytes = byte_stream.toByteArray()
+            if not image_bytes:
+                run_on_ui_thread(lambda: BulletinHelper.show_error("Файл пустой или поврежден."))
+                return
+            file_path = os.path.join(self._plugin_dir_path, "banner_image.png")
+            output_stream = FileOutputStream(file_path)
+            output_stream.write(image_bytes)
+            run_on_ui_thread(lambda: self._update_settings_on_success(file_path))
+        except Exception as e:
+            log(f"[{self.id}] Ошибка обработки URI файла: {e}\n{traceback.format_exc()}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error("Ошибка обработки файла."))
+        finally:
+            for stream in [input_stream, byte_stream, output_stream]:
+                if stream:
+                    try: stream.close()
+                    except Exception as e: log(f"[{self.id}] Ошибка закрытия потока: {e}")
+    
+    def _update_settings_on_success(self, file_path: str):
+        self._set_setting_compat("banner_internal_path", file_path, reload=True)
+        BulletinHelper.show_success("Изображение успешно установлено")
+        fragment = get_last_fragment()
+        if fragment and hasattr(fragment, 'onResume'): fragment.onResume()
+
+    def _delete_image(self, view=None):
+        file_path = self.get_setting("banner_internal_path", None)
+        if file_path and os.path.exists(file_path):
+            try: os.remove(file_path)
+            except OSError as e: log(f"[{self.id}] Не удалось удалить файл {file_path}: {e}")
+        self._set_setting_compat("banner_internal_path", "", reload=True)
+        BulletinHelper.show_success("Изображение удалено, баннер сброшен")
+        fragment = get_last_fragment()
+        if fragment and hasattr(fragment, 'onResume'): fragment.onResume()

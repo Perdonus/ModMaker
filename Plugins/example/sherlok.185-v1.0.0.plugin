@@ -1,0 +1,131 @@
+import requests
+from typing import Dict, Any, Optional
+
+from base_plugin import BasePlugin, MenuItemData, MenuItemType
+from client_utils import get_last_fragment, run_on_queue, send_message, get_user_config
+from android_utils import log, run_on_ui_thread
+from ui.alert import AlertDialogBuilder
+
+# --- НАСТРОЙКИ ПЛАГИНА ---
+# Текст, который будет отображаться в меню профиля
+MENU_ITEM_TEXT = "Найти в соцсетях (Шерлок)"
+
+# Список сайтов для поиска. {username} будет заменен на никнейм пользователя.
+# Вы можете добавлять или удалять сайты из этого списка.
+# Формат: "Название": "URL"
+SITES_TO_CHECK = {
+    "Instagram": "https://www.instagram.com/{username}",
+    "TikTok": "https://www.tiktok.com/@{username}",
+    "Twitter / X": "https://twitter.com/{username}",
+    "GitHub": "https://github.com/{username}",
+    "Reddit": "https://www.reddit.com/user/{username}",
+    "YouTube": "https://www.youtube.com/@{username}",
+    "Twitch": "https://www.twitch.tv/{username}",
+    "Steam": "https://steamcommunity.com/id/{username}",
+    "Facebook": "https://www.facebook.com/{username}",
+    "VK": "https://vk.com/{username}"
+}
+# --- КОНЕЦ НАСТРОЕК ---
+
+__id__ = "sherlock_menu_integration"
+__name__ = "Sherlock Menu Integration"
+__description__ = "Ищет аккаунты пользователя по никнейму в различных соцсетях через меню профиля."
+__author__ = "@UseLabBot"
+__version__ = "1.1.0"
+__icon__ = "UseLab/8"
+__min_version__ = "11.12.0"
+
+class SherlockPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.progress_dialog: Optional[AlertDialogBuilder] = None
+
+    def on_plugin_load(self):
+        """Вызывается при загрузке плагина. Добавляет кнопку в меню."""
+        self.add_menu_item(
+            MenuItemData(
+                menu_type=MenuItemType.PROFILE_ACTION_MENU,
+                text=MENU_ITEM_TEXT,
+                on_click=self._handle_profile_click,
+                # Условие: показывать кнопку только если у пользователя есть никнейм
+                condition="user.username != null",
+                icon="user_search"
+            )
+        )
+
+    def _handle_profile_click(self, context: Dict[str, Any]):
+        """Обрабатывает нажатие на кнопку в меню."""
+        user = context.get("user")
+        if not user or not user.username:
+            log("Sherlock: Не удалось получить пользователя или его никнейм.")
+            return
+
+        username = user.username
+        log(f"Sherlock: Начало поиска для пользователя @{username}")
+
+        current_fragment = get_last_fragment()
+        if not current_fragment or not current_fragment.getParentActivity():
+            log("Sherlock: Не удалось получить контекст для отображения диалога.")
+            # Попытка выполнить поиск даже без диалога
+            run_on_queue(lambda: self._perform_search(username))
+            return
+
+        # Показываем диалог загрузки
+        activity = current_fragment.getParentActivity()
+        self.progress_dialog = AlertDialogBuilder(activity, AlertDialogBuilder.ALERT_TYPE_SPINNER)
+        self.progress_dialog.set_title("Поиск...")
+        self.progress_dialog.set_message(f"Ищем аккаунты для @{username}")
+        self.progress_dialog.set_cancelable(False)
+        self.progress_dialog.show()
+
+        # Запускаем поиск в фоновом потоке, чтобы не замораживать интерфейс
+        run_on_queue(lambda: self._perform_search(username))
+
+    def _perform_search(self, username: str):
+        """Выполняет сетевые запросы для поиска аккаунтов."""
+        found_urls = []
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+
+        for name, url_template in SITES_TO_CHECK.items():
+            url = url_template.format(username=username)
+            try:
+                # Устанавливаем таймаут, чтобы не ждать ответа слишком долго
+                response = requests.get(url, headers=headers, timeout=5)
+                # Считаем успешным, если статус-код 200 (OK)
+                if response.status_code == 200:
+                    log(f"Sherlock: Найден аккаунт @{username} на {name}: {url}")
+                    found_urls.append(f"• {name}: {url}")
+            except requests.RequestException as e:
+                # Игнорируем ошибки сети, таймауты и т.д.
+                log(f"Sherlock: Ошибка при проверке {name}: {e}")
+
+        # Формируем и отправляем сообщение с результатами
+        run_on_ui_thread(lambda: self._show_results(username, found_urls))
+
+    def _show_results(self, username: str, found_urls: list):
+        """Отображает результаты поиска пользователю."""
+        # Скрываем диалог загрузки
+        if self.progress_dialog:
+            self.progress_dialog.dismiss()
+            self.progress_dialog = None
+
+        # Получаем ID текущего пользователя, чтобы отправить сообщение в "Избранное"
+        user_config = get_user_config()
+        if not user_config:
+            log("Sherlock: Не удалось получить user_config для отправки сообщения.")
+            return
+        
+        peer_id = user_config.getClientUserId()
+
+        if found_urls:
+            message_text = f"Найденные аккаунты для @{username}:\n\n" + "\n".join(found_urls)
+        else:
+            message_text = f"Не удалось найти открытые аккаунты для @{username} на проверенных сайтах."
+
+        message_params = {
+            "peer": peer_id,
+            "message": message_text
+        }
+
+        send_message(message_params)
+        log(f"Sherlock: Отправлено сообщение с результатами для @{username}.")

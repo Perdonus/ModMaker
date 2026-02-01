@@ -1,0 +1,308 @@
+__id__ = "JakeAI"
+__name__ = "Jake AI"
+__author__ = "@jakekson (@jakekkson)"
+__version__ = "1.0.1"
+__description__ = """ИИ помощник
+- Работает с текстом
+- Добавляет кнопку в меню при клике на сообщение
+- Также можно добавлять свои функции (роли ИИ)
+.ai / .ии (вопрос) - спросить вопрос у ИИ"""
+
+__icon__ = "sPluginIDE/4"
+__min_version__ = "11.12.0"
+
+import requests
+import json
+import threading
+import traceback
+from typing import Any, Dict, List
+import copy
+
+from base_plugin import BasePlugin, MenuItemData, MenuItemType, HookResult, HookStrategy
+from client_utils import get_last_fragment
+from android_utils import run_on_ui_thread, log
+from ui.settings import Header, Input, Selector, Divider, Text
+from ui.bulletin import BulletinHelper
+from ui.alert import AlertDialogBuilder
+from org.telegram.messenger import MessageObject, AndroidUtilities
+from com.exteragram.messenger.plugins import PluginsController
+from com.exteragram.messenger.plugins.ui import PluginSettingsActivity
+
+# API URL для OpenRouter
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+class ChatSummarizerPlugin(BasePlugin):
+    """
+    Анализирует текст сообщения с помощью ИИ и показывает результат в удобном окне.
+    """
+    MODEL_IDS = [
+        "z-ai/glm-4.5-air:free",
+        "openai/gpt-oss-20b:free",
+        "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        "shisa-ai/shisa-v2-llama3.3-70b:free",
+        "meta-llama/llama-4-maverick:free",
+        "moonshotai/kimi-k2:free",
+    ]
+    MODEL_NAMES = [
+        "GLM-4.5-Air (Free)",
+        "GPT-OSS-20B (Free)",
+        "Dolphin Mistral 24B (Free)",
+        "Shisa V2 Llama3.3 70B (Free)",
+        "Llama 4 Maverick (Free)",
+        "Kimi K2 (Free)",
+    ]
+
+    DEFAULT_ROLES = {
+        "summarize": {"name": "Краткое содержание", "prompt": "Ты — эксперт в кратком изложении. Напиши максимально краткое содержание предоставленного текста. Не используй Markdown и таблицы."},
+        "fix_grammar": {"name": "Исправить грамматику", "prompt": "Ты — редактор. Исправь все грамматические и орфографические ошибки в предоставленном тексте."},
+        "translate_en": {"name": "Перевести на английский", "prompt": "Ты — переводчик. Переведи предоставленный текст на английский язык."},
+        "explain_eli5": {"name": "Объяснить просто", "prompt": "Объясни идею предоставленного текста так, как будто объясняешь её пятилетнему ребёнку."}
+    }
+    
+    def __init__(self):
+        super().__init__()
+        self.progress_dialog = None
+
+    def on_plugin_load(self):
+        self.add_on_send_message_hook() # Хук для обработки команд
+        self.add_menu_item(MenuItemData(
+            menu_type=MenuItemType.DRAWER_MENU, 
+            text="Jake AI", 
+            icon="msg_settings_ny", 
+            on_click=lambda c: self._open_plugin_settings()
+        ))
+        self.add_menu_item(MenuItemData(
+            menu_type=MenuItemType.MESSAGE_CONTEXT_MENU, 
+            text="Обработать с ИИ", 
+            icon="ai_chat_solar", 
+            on_click=self.on_process_message_click, 
+            condition="message.messageOwner.message != null && !message.messageOwner.message.isEmpty()"
+        ))
+
+    def on_send_message_hook(self, account: int, params: Any) -> HookResult:
+        if not hasattr(params, 'message') or not isinstance(params.message, str):
+            return HookResult()
+            
+        msg = params.message.strip()
+        
+        # Проверяем команды .ai и .ии
+        if msg.lower().startswith(".ai ") or msg.lower().startswith(".ии "):
+            question = msg[msg.find(" ") + 1:].strip()
+            if not question:
+                return HookResult() # Если после команды нет текста, ничего не делаем
+
+            self.start_processing_question(question)
+            return HookResult(strategy=HookStrategy.CANCEL)
+            
+        return HookResult()
+
+    def _load_custom_roles(self) -> List[Dict]:
+        try:
+            roles_json = self.get_setting("custom_roles_json", "[]")
+            return json.loads(roles_json) if isinstance(roles_json, str) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def _save_custom_roles(self, roles: List[Dict]):
+        self.set_setting("custom_roles_json", json.dumps(roles))
+
+    def _get_all_roles(self) -> Dict:
+        all_roles = copy.deepcopy(self.DEFAULT_ROLES)
+        for i, role in enumerate(self._load_custom_roles()):
+            all_roles[f"custom_{i}"] = role
+        return all_roles
+        
+    def _refresh_settings_page(self):
+        fragment = get_last_fragment()
+        if fragment and hasattr(fragment, "rebuildAllFragments"):
+            run_on_ui_thread(lambda: fragment.rebuildAllFragments(True))
+            
+    def _open_plugin_settings(self, context: dict = None):
+        def action():
+            try:
+                java_plugin = PluginsController.getInstance().plugins.get(self.id)
+                if java_plugin and (fragment := get_last_fragment()):
+                    fragment.presentFragment(PluginSettingsActivity(java_plugin))
+            except Exception as e:
+                log(f"[{self.id}] Не удалось открыть настройки: {e}")
+        run_on_ui_thread(action)
+
+    def create_settings(self):
+        settings = [
+            Header(text="Настройки API"),
+            Input(key="api_key", text="API Ключ OpenRouter", default="", subtext="Получите бесплатный ключ на OpenRouter.ai", icon="menu_username_set_solar"),
+            Selector(key="model_index", text="Модель ИИ", items=self.MODEL_NAMES, default=0, icon="msg_folders_bots_solar"),
+            Header(text="Команда .ai/.ии"),
+            Input(key="prompt_ask_ai", text="Системный промпт для .ai", default="Отвечай максимально кратко, без Markdown и таблиц.", icon="msg_ask_question_solar"),
+            Divider(),
+            Header(text="Роли по умолчанию (для меню сообщения)")
+        ]
+        
+        for key, data in self.DEFAULT_ROLES.items():
+            settings.append(Input(key=f"prompt_{key}", text=f"Промпт для '{data['name']}'", default=data['prompt'], icon="msg_edit_solar"))
+        
+        settings.append(Divider())
+        settings.append(Header(text="Пользовательские роли"))
+        
+        for i, role in enumerate(self._load_custom_roles()):
+            settings.extend([
+                Input(key=f"custom_role_name_{i}", text=f"Имя роли #{i+1}", default=role.get('name', ''), on_change=lambda val, idx=i: self._update_custom_role(idx, 'name', val)),
+                Input(key=f"custom_role_prompt_{i}", text=f"Промпт роли #{i+1}", default=role.get('prompt', ''), on_change=lambda val, idx=i: self._update_custom_role(idx, 'prompt', val)),
+                Text(text="Удалить эту роль", icon="msg_delete", red=True, on_click=lambda v, idx=i: self._remove_role(idx))
+            ])
+            
+        settings.append(Divider())
+        settings.append(Text(text="Добавить новую роль", icon="msg_add_file", accent=True, on_click=lambda v: self._add_role()))
+        return settings
+
+    def _add_role(self):
+        roles = self._load_custom_roles()
+        roles.append({"name": "Новая роль", "prompt": ""})
+        self._save_custom_roles(roles)
+        self._refresh_settings_page()
+
+    def _remove_role(self, index: int):
+        roles = self._load_custom_roles()
+        if 0 <= index < len(roles):
+            roles.pop(index)
+            self._save_custom_roles(roles)
+            self._refresh_settings_page()
+
+    def _update_custom_role(self, index: int, field: str, value: str):
+        roles = self._load_custom_roles()
+        if 0 <= index < len(roles):
+            roles[index][field] = value
+            self._save_custom_roles(roles)
+
+    def on_process_message_click(self, context: Dict[str, Any]):
+        message_obj = context.get("message")
+        if not (message_obj and message_obj.messageOwner and message_obj.messageOwner.message):
+            BulletinHelper.show_error("Не удалось получить текст сообщения.")
+            return
+
+        fragment = get_last_fragment()
+        activity = fragment.getParentActivity() if fragment else None
+        if not activity: return
+
+        all_roles = self._get_all_roles()
+        role_names = [role['name'] for role in all_roles.values()]
+        
+        def on_role_selected(builder, index):
+            role_key = list(all_roles.keys())[index]
+            role_data = all_roles.get(role_key)
+            system_prompt = self.get_setting(f"prompt_{role_key}", role_data["prompt"]).strip()
+            self.start_processing(message_obj.messageOwner.message, system_prompt, role_data["name"])
+            builder.dismiss()
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Выберите действие")
+        builder.set_items(role_names, on_role_selected)
+        builder.show()
+
+    def _show_progress_dialog(self, title: str):
+        def action():
+            self._dismiss_progress_dialog()
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+            if not activity: return
+            
+            builder = AlertDialogBuilder(activity, AlertDialogBuilder.ALERT_TYPE_SPINNER)
+            builder.set_title(title)
+            builder.set_message("Ждите...")
+            builder.set_cancelable(False)
+            self.progress_dialog = builder.show()
+        run_on_ui_thread(action)
+
+    def _dismiss_progress_dialog(self):
+        def action():
+            if self.progress_dialog and self.progress_dialog.get_dialog() and self.progress_dialog.get_dialog().isShowing():
+                self.progress_dialog.dismiss()
+            self.progress_dialog = None
+        run_on_ui_thread(action)
+
+    def start_processing(self, message_text: str, system_prompt: str, title: str, original_question: str = None):
+        api_key_pi = self.get_setting("api_key", "").strip()
+        if not api_key_pi:
+            BulletinHelper.show_error("API ключ не указан!", icon="msg_info")
+            self._open_plugin_settings()
+            return
+            
+        model_index = self.get_setting("model_index", 0)
+        model = self.MODEL_IDS[min(model_index, len(self.MODEL_IDS) - 1)]
+
+        self._show_progress_dialog(f"Выполняю: {title}")
+        # сгенерировано в Plugin IDE - @PluginIDE
+        threading.Thread(target=self._processing_task, args=(message_text, api_key_pi, model, system_prompt, title, original_question), daemon=True).start()
+
+    def start_processing_question(self, question: str):
+        system_prompt = self.get_setting("prompt_ask_ai", "Отвечай максимально кратко, без Markdown и таблиц.")
+        self.start_processing(question, system_prompt, "Ответ ИИ", original_question=question)
+
+    def _processing_task(self, message_text, api_key, model, system_prompt, role_title, original_question=None):
+        try:
+            result_text = self._call_openrouter(message_text, api_key, model, system_prompt)
+            if result_text is not None:
+                final_display_text = result_text
+                if original_question:
+                    final_display_text = f"❓ Вопрос:\n{original_question}\n\n💡 Ответ:\n{result_text}"
+                self._show_result_dialog(final_display_text, role_title)
+        except Exception as e:
+            log(f"[{self.id}] Ошибка в задаче: {e}\n{traceback.format_exc()}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error(f"Ошибка: {e}"))
+        finally:
+            self._dismiss_progress_dialog()
+
+    def _call_openrouter(self, message_text: str, api_key: str, model: str, system_prompt: str) -> str:
+        headers = {
+            "Authorization": f"Bearer {api_key}", 
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/PluginIDE",
+            "X-Title": "exteraGram AI Helper"
+        }
+        data = { "model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": message_text}] }
+        try:
+            response = requests.post(OPENROUTER_API_URL, headers=headers, json=data, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+            result = response_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            if not result:
+                run_on_ui_thread(lambda: BulletinHelper.show_error("ИИ вернул пустой ответ."))
+                return None
+            return result
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Ошибка сети: {e}"
+            if e.response is not None:
+                try: error_msg = f"Ошибка API {e.response.status_code}: {e.response.json().get('error', {}).get('message', e.response.text)}"
+                except json.JSONDecodeError: error_msg = f"Ошибка API {e.response.status_code}: {e.response.text}"
+            run_on_ui_thread(lambda: BulletinHelper.show_error(error_msg))
+            return None
+        except (KeyError, IndexError) as e:
+            log(f"[{self.id}] Неверная структура ответа API: {e}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error("Неверный формат ответа от ИИ."))
+            return None
+
+    def _show_result_dialog(self, result_text: str, title: str):
+        # =^._.^=
+        def show_action():
+            try:
+                fragment = get_last_fragment()
+                activity_pi = fragment.getParentActivity() if fragment else None
+                if not activity_pi: raise ValueError("Activity not found")
+                
+                builder = AlertDialogBuilder(activity_pi)
+                builder.set_title(f"📝 {title}")
+                builder.set_message(result_text)
+                
+                def on_copy_click(bld, which):
+                    AndroidUtilities.addToClipboard(result_text)
+                    BulletinHelper.show_copied_to_clipboard("Текст скопирован")
+
+                builder.set_neutral_button("Скопировать", on_copy_click)
+                builder.set_positive_button("Закрыть", lambda bld, which: bld.dismiss())
+                builder.show()
+                BulletinHelper.show_success(f"{title}: Готово!")
+            except Exception as e:
+                log(f"[{self.id}] Ошибка отображения диалога: {e}\n{traceback.format_exc()}")
+                BulletinHelper.show_error("Не удалось отобразить окно с результатом.")
+        
+        run_on_ui_thread(show_action)

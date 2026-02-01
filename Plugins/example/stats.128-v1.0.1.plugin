@@ -1,0 +1,208 @@
+import time
+from collections import defaultdict
+from datetime import datetime
+from typing import Any, Optional
+
+from android_utils import log, run_on_ui_thread
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from client_utils import run_on_queue, get_last_fragment, send_message, get_messages_controller
+from ui.alert import AlertDialogBuilder
+
+__id__ = "personal_stats"
+__name__ = "Personal Stats"
+__description__ = "Provides personal messaging statistics [.stats]"
+__author__ = "@extraplugin"
+__version__ = "1.0.0"
+__icon__ = "exteraPlugins/1"
+__min_version__ = "11.12.0"
+
+
+class PersonalStatsPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.message_count = 0
+        self.daily_stats = defaultdict(lambda: {'message_count': 0, 'dialogs': defaultdict(int)})
+        self.progress_dialog_builder = None
+        self.current_date = datetime.now().date().isoformat()
+
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+        self.load_stats()
+
+    def on_plugin_unload(self):
+        self.save_stats()
+
+    def load_stats(self):
+        try:
+            saved_stats = self.get_setting("daily_stats", {})
+            if saved_stats:
+                self.daily_stats.update(saved_stats)
+            self.message_count = self.get_setting("total_messages", 0)
+        except Exception as e:
+            log(f"Error loading stats: {str(e)}")
+
+    def save_stats(self):
+        try:
+            self.set_setting("daily_stats", dict(self.daily_stats))
+            self.set_setting("total_messages", self.message_count)
+        except Exception as e:
+            log(f"Error saving stats: {str(e)}")
+
+    def update_daily_stats(self, dialog_id: int):
+        today = datetime.now().date().isoformat()
+        if today != self.current_date:
+            self.save_stats()
+            self.current_date = today
+        self.message_count += 1
+        self.daily_stats[today]['message_count'] += 1
+        self.daily_stats[today]['dialogs'][dialog_id] += 1
+
+    def get_today_stats(self):
+        today = datetime.now().date().isoformat()
+        return self.daily_stats.get(today, {'message_count': 0, 'dialogs': {}})
+
+    def get_dialog_name(self, dialog_id: int) -> str:
+        try:
+            messages_controller = get_messages_controller()
+
+
+            if dialog_id > 0:
+                user = messages_controller.getUser(dialog_id)
+                if user:
+                    name_parts = []
+                    if hasattr(user, "first_name") and user.first_name:
+                        name_parts.append(user.first_name)
+                    if hasattr(user, "last_name") and user.last_name:
+                        name_parts.append(user.last_name)
+                    if name_parts:
+                        return " ".join(name_parts)
+                    if hasattr(user, "username") and user.username:
+                        return f"@{user.username}"
+
+
+            else:
+                chat = messages_controller.getChat(-dialog_id)
+                if chat:
+                    if hasattr(chat, "title") and chat.title:
+                        return str(chat.title)
+
+            return "❓Неизвестный диалог"
+        except Exception as e:
+            log(f"Error getting dialog name: {str(e)}")
+            return "❓Неизвестный диалог"
+
+    def format_stats_message(self, stats: dict) -> str:
+        today = datetime.now().strftime("%d.%m.%Y")
+        total_today = stats['message_count']
+
+        message_parts = [
+            f"📊 Персональная статистика за {today}\n",
+            f"✉️ Всего сообщений: {total_today}\n"
+        ]
+
+        if total_today > 0:
+            dialogs = stats.get('dialogs', {})
+            sorted_dialogs = sorted(dialogs.items(), key=lambda x: x[1], reverse=True)[:3]
+
+            if sorted_dialogs:
+                message_parts.append("\n🏆 Топ диалогов:\n")
+
+                for i, (dialog_id, count) in enumerate(sorted_dialogs, 1):
+                    dialog_name = self.get_dialog_name(dialog_id)
+                    percentage = (count / total_today) * 100
+                    message_parts.append(
+                        f"{i}. 💬 {dialog_name}: {count} сообщ. ({percentage:.1f}%)\n"
+                    )
+
+        message_parts.append(f"\n📈 Всего сообщений за всё время: {self.message_count}")
+        message_parts.append(f"\n\n⏰ Обновлено: {datetime.now().strftime('%H:%M:%S')}")
+
+        return "".join(message_parts)
+
+    def _process_stats_request(self, peer_id: Any):
+        try:
+            today_stats = self.get_today_stats()
+            message_content = self.format_stats_message(today_stats)
+
+            message_params = {
+                "message": message_content,
+                "peer": peer_id
+            }
+
+            def _send_message_and_dismiss_dialog():
+                if self.progress_dialog_builder:
+                    self.progress_dialog_builder.dismiss()
+                    self.progress_dialog_builder = None
+                send_message(message_params)
+
+            run_on_ui_thread(_send_message_and_dismiss_dialog)
+
+        except Exception as e:
+            log(f"Error processing stats: {str(e)}")
+
+            def _show_error():
+                if self.progress_dialog_builder:
+                    self.progress_dialog_builder.dismiss()
+                    self.progress_dialog_builder = None
+
+            run_on_ui_thread(_show_error)
+
+    def on_send_message_hook(self, account: int, params: Any) -> HookResult:
+        try:
+            if isinstance(params.message, str) and params.message.strip() == ".stats":
+                return self._handle_stats_command(params)
+
+            if isinstance(params.message, str) and params.message.strip() and hasattr(params, 'peer'):
+                self.update_daily_stats(params.peer)
+                if self.message_count % 10 == 0:
+                    self.save_stats()
+
+            return HookResult()
+
+        except Exception as e:
+            log(f"Error in send message hook: {str(e)}")
+            return HookResult()
+
+    def _handle_stats_command(self, params: Any) -> HookResult:
+        try:
+            current_fragment = get_last_fragment()
+            if not current_fragment:
+                params.message = "Ошибка: не удалось получить контекст"
+                return HookResult(strategy=HookStrategy.MODIFY, params=params)
+
+            current_activity = current_fragment.getParentActivity()
+            if not current_activity:
+                params.message = "Ошибка: не удалось получить активность"
+                return HookResult(strategy=HookStrategy.MODIFY, params=params)
+
+            self.progress_dialog_builder = AlertDialogBuilder(
+                current_activity,
+                AlertDialogBuilder.ALERT_TYPE_SPINNER
+            )
+            self.progress_dialog_builder.set_title("Загрузка статистики")
+            self.progress_dialog_builder.set_message("Собираем данные...")
+            self.progress_dialog_builder.set_cancelable(False)
+            self.progress_dialog_builder.show()
+
+            run_on_queue(lambda: self._process_stats_request(params.peer))
+
+            return HookResult(strategy=HookStrategy.CANCEL)
+
+        except Exception as e:
+            log(f"Error handling stats command: {str(e)}")
+            params.message = f"Ошибка: {str(e)}"
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+
+    def create_settings(self):
+        return [
+            Header(text="Настройки статистики"),
+            Switch(
+                key="auto_save",
+                text="Автосохранение статистики",
+                default=True,
+                subtext="Автоматически сохранять статистику каждые 10 сообщений"
+            ),
+            Divider(text="Плагин собирает анонимную статистику вашей активности"),
+            Header(text="Команды"),
+            Divider(text=".stats - показать статистику за сегодня")
+        ]

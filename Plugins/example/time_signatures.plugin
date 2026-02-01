@@ -1,0 +1,187 @@
+from base_plugin import HookResult, HookStrategy, BasePlugin
+from java.util import Locale
+from datetime import datetime
+
+__id__ = "timestampadder"
+__name__ = "Timestamp Adder"
+__description__ = """.ts on - включить плагин
+.ts off - выключить плагин
+.ts format 1 - формат [ЧЧ:ММ:СС]
+.ts format 2 - формат [ЧЧ:ММ]
+.ts format 3 - формат (ЧЧ:ММ:СС)
+.ts format 4 - формат ⏰ ЧЧ:ММ:СС
+.ts format 5 - формат 🕐 ЧЧ:ММ
+.ts start - время в начале
+.ts end - время в конце
+.ts help - эта помощь"""
+__author__ = "@JavaScript_XD и мой котт🐱"
+__min_version__ = "11.9.0"
+__icon__ = "Plaginy7/1"
+__version__ = "1.0"
+
+class LocalizationManager:
+    def __init__(self):
+        self.language = Locale.getDefault().getLanguage()
+        self.language = self.language if self.language in self._get_supported_languages() else "en"
+        
+    def get_string(self, string):
+        return self.strings[self.language][string]
+
+    def _get_supported_languages(self):
+        return self.strings.keys()
+    
+    strings = {
+        "ru": {
+            "ENABLED": "✅ Добавление времени активировано",
+            "DISABLED": "❌ Добавление времени деактивировано",
+            "FORMAT_CHANGED": "⏰ Формат изменён на: {}",
+            "POSITION_START": "📍 Время теперь в начале",
+            "POSITION_END": "📍 Время теперь в конце",
+            "HELP": """📋 Команды Timestamp Adder:
+
+.ts on - включить плагин
+.ts off - выключить плагин
+.ts format 1 - формат [ЧЧ:ММ:СС]
+.ts format 2 - формат [ЧЧ:ММ]
+.ts format 3 - формат (ЧЧ:ММ:СС)
+.ts format 4 - формат ⏰ ЧЧ:ММ:СС
+.ts format 5 - формат 🕐 ЧЧ:ММ
+.ts start - время в начале
+.ts end - время в конце
+.ts help - эта помощь"""
+        },
+        "en": {
+            "ENABLED": "✅ Timestamp adding enabled",
+            "DISABLED": "❌ Timestamp adding disabled",
+            "FORMAT_CHANGED": "⏰ Format changed to: {}",
+            "POSITION_START": "📍 Timestamp now at start",
+            "POSITION_END": "📍 Timestamp now at end",
+            "HELP": """📋 Timestamp Adder Commands:
+
+.ts on - enable plugin
+.ts off - disable plugin
+.ts format 1 - format [HH:MM:SS]
+.ts format 2 - format [HH:MM]
+.ts format 3 - format (HH:MM:SS)
+.ts format 4 - format ⏰ HH:MM:SS
+.ts format 5 - format 🕐 HH:MM
+.ts start - timestamp at start
+.ts end - timestamp at end
+.ts help - this help"""
+        }
+    }
+    
+locali = LocalizationManager()
+
+class TimestampAdderPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.enabled = True
+        self.format_type = 1
+        self.position = "end"
+        
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+        self.enabled = self.get_setting("enabled", True)
+        self.format_type = self.get_setting("format_type", 1)
+        self.position = self.get_setting("position", "end")
+    
+    def on_send_message_hook(self, account, params) -> HookResult:
+        if not hasattr(params, "message") or not isinstance(params.message, str):
+            return HookResult()
+            
+        message = params.message
+        
+        if not message:
+            return HookResult()
+        
+        if message.startswith(".ts "):
+            return self.handle_command(message, params)
+        
+        if not self.enabled:
+            return HookResult()
+        
+        now = datetime.now()
+        
+        if self.format_type == 1:
+            timestamp = now.strftime("[%H:%M:%S]")
+            format_name = "[HH:MM:SS]"
+        elif self.format_type == 2:
+            timestamp = now.strftime("[%H:%M]")
+            format_name = "[HH:MM]"
+        elif self.format_type == 3:
+            timestamp = now.strftime("(%H:%M:%S)")
+            format_name = "(HH:MM:SS)"
+        elif self.format_type == 4:
+            timestamp = now.strftime("⏰ %H:%M:%S")
+            format_name = "⏰ HH:MM:SS"
+        elif self.format_type == 5:
+            timestamp = now.strftime("🕐 %H:%M")
+            format_name = "🕐 HH:MM"
+        else:
+            timestamp = now.strftime("[%H:%M:%S]")
+            format_name = "[HH:MM:SS]"
+        
+        if self.position == "start":
+            params.message = f"{timestamp} {message}"
+        else:
+            params.message = f"{message} {timestamp}"
+        
+        return HookResult(strategy=HookStrategy.MODIFY, params=params)
+    
+    def handle_command(self, message, params):
+        parts = message.split()
+        
+        if len(parts) < 2:
+            return HookResult()
+        
+        command = parts[1].lower()
+        
+        if command == "on":
+            self.enabled = True
+            self.set_setting("enabled", True)
+            params.message = locali.get_string("ENABLED")
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        
+        elif command == "off":
+            self.enabled = False
+            self.set_setting("enabled", False)
+            params.message = locali.get_string("DISABLED")
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        
+        elif command == "format" and len(parts) >= 3:
+            try:
+                format_num = int(parts[2])
+                if 1 <= format_num <= 5:
+                    self.format_type = format_num
+                    self.set_setting("format_type", format_num)
+                    
+                    formats = {
+                        1: "[HH:MM:SS]",
+                        2: "[HH:MM]",
+                        3: "(HH:MM:SS)",
+                        4: "⏰ HH:MM:SS",
+                        5: "🕐 HH:MM"
+                    }
+                    params.message = locali.get_string("FORMAT_CHANGED").format(formats[format_num])
+                    return HookResult(strategy=HookStrategy.MODIFY, params=params)
+            except:
+                pass
+        
+        elif command == "start":
+            self.position = "start"
+            self.set_setting("position", "start")
+            params.message = locali.get_string("POSITION_START")
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        
+        elif command == "end":
+            self.position = "end"
+            self.set_setting("position", "end")
+            params.message = locali.get_string("POSITION_END")
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        
+        elif command == "help":
+            params.message = locali.get_string("HELP")
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        
+        return HookResult()

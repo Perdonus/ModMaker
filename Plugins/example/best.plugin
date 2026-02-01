@@ -1,0 +1,326 @@
+__id__ = "minesweeper_minimal"
+__name__ = "Сапёр"
+__description__ = "Классическая игра Сапёр"
+__version__ = "1.0.0"
+__author__ = "@JavaScript_XD"
+__icon__ = "survive_linux_flood_by_fStikBot/0"
+
+import random, time, threading
+from functools import partial
+from base_plugin import BasePlugin, MenuItemData, MenuItemType
+from hook_utils import find_class
+from java import dynamic_proxy
+from android_utils import run_on_ui_thread
+from client_utils import get_last_fragment
+from ui.alert import AlertDialogBuilder
+from android.view import View, Gravity
+from android.widget import Button, TextView, LinearLayout, GridLayout, ScrollView, HorizontalScrollView
+from android.graphics import Color, Typeface
+from android.graphics.drawable import GradientDrawable
+from android.os import Build, VibrationEffect
+from android.content import Context
+
+# Увеличены размеры ячеек и текста для лучшей читаемости
+LEVELS = [(8,8,10,"Новичок",40,18), (12,12,25,"Любитель",32,16), (16,16,50,"Эксперт",26,14)]
+
+View_OnClickListener = find_class("android.view.View$OnClickListener")
+class _Click(dynamic_proxy(View_OnClickListener)):
+    def __init__(self, cb):
+        super().__init__()
+        self.cb = cb
+    def onClick(self, v):
+        self.cb(v)
+
+View_OnLongClickListener = find_class("android.view.View$OnLongClickListener")
+class _Long(dynamic_proxy(View_OnLongClickListener)):
+    def __init__(self, cb):
+        super().__init__()
+        self.cb = cb
+    def onLongClick(self, v):
+        return self.cb(v)
+
+class Game:
+    def __init__(self, w=12, h=12, m=25):
+        self.w, self.h, self.m = w, h, m
+        self.reset()
+
+    def reset(self):
+        self.board = [[0]*self.w for _ in range(self.h)]
+        self.visible = [[0]*self.w for _ in range(self.h)]
+        self.mines, self.flags, self.first, self.over, self.won = set(), 0, True, False, False
+
+    def setup(self, sx, sy):
+        pos = [(r,c) for r in range(self.h) for c in range(self.w) if abs(r-sy)>1 or abs(c-sx)>1]
+        self.mines = set(random.sample(pos, min(self.m, len(pos))))
+        for r in range(self.h):
+            for c in range(self.w):
+                self.board[r][c] = -1 if (r,c) in self.mines else sum(1 for dr in [-1,0,1] for dc in [-1,0,1] if (r+dr,c+dc) in self.mines)
+        self.first = False
+
+    def reveal(self, x, y):
+        if self.over or not(0<=y<self.h and 0<=x<self.w) or self.visible[y][x]: return
+        if self.first: self.setup(x, y)
+        self.visible[y][x] = 1
+        if self.board[y][x] == -1:
+            self.over = True
+            return
+        if self.board[y][x] == 0:
+            for dr in [-1,0,1]:
+                for dc in [-1,0,1]:
+                    self.reveal(x+dc, y+dr)
+        if sum(1 for r in range(self.h) for c in range(self.w) if self.visible[r][c]==1) == self.w*self.h - len(self.mines):
+            self.over = self.won = True
+            # Автоматически установить флажки на все мины при победе
+            for r,c in self.mines:
+                if self.visible[r][c] != 1:
+                    self.visible[r][c] = 2
+            self.flags = len(self.mines)
+
+    def flag(self, x, y):
+        if self.over or not(0<=y<self.h and 0<=x<self.w) or self.visible[y][x] == 1: return
+        # ИСПРАВЛЕНИЕ БАГА: правильная логика переключения флажков
+        if self.visible[y][x] == 2:  # Если стоит флажок - убираем его
+            self.visible[y][x] = 0
+            self.flags -= 1
+        elif self.visible[y][x] == 0:  # Если пусто - ставим флажок
+            self.visible[y][x] = 2
+            self.flags += 1
+
+class MinesweeperPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.game = self.dialog = self.timer_view = self.flags_view = self.status_view = self.timer_thread = self.vibrator = None
+        self.cells, self.time = [], 0
+        self.stop_event = threading.Event()
+        self.AU = find_class("org.telegram.messenger.AndroidUtilities")
+        self.colors = ["#4A90E2","#50C878","#FF6B6B","#B47EDE","#FFD93D","#6BCFCF","#FF8C42","#7D8A96"]
+
+    def on_plugin_load(self):
+        self.add_menu_item(MenuItemData(menu_type=MenuItemType.CHAT_ACTION_MENU, text="💣 Сапёр", icon="msg_game", on_click=self._menu))
+
+    def on_plugin_unload(self):
+        self._exit()
+
+    def _vib(self, ms):
+        if not self.vibrator: return
+        try:
+            if Build.VERSION.SDK_INT >= 26:
+                self.vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+            else:
+                self.vibrator.vibrate(ms)
+        except: pass
+
+    def _menu(self, ctx=None):
+        self._exit()
+        frag = get_last_fragment()
+        if not frag: return
+        act = frag.getParentActivity()
+        self.vibrator = act.getSystemService(Context.VIBRATOR_SERVICE)
+        
+        builder = AlertDialogBuilder(act)
+        layout = LinearLayout(act)
+        layout.setOrientation(LinearLayout.VERTICAL)
+        layout.setGravity(Gravity.CENTER)
+        layout.setPadding(self.AU.dp(20), self.AU.dp(20), self.AU.dp(20), self.AU.dp(20))
+        layout.setBackgroundColor(Color.parseColor("#1A1D26"))
+        
+        title = TextView(act)
+        title.setText("💣 Сапёр")
+        title.setTextSize(24)
+        title.setTypeface(None, Typeface.BOLD)
+        title.setTextColor(Color.parseColor("#FFB84D"))
+        title.setGravity(Gravity.CENTER)
+        title.setPadding(0, 0, 0, self.AU.dp(15))
+        layout.addView(title)
+
+        for i, (w, h, m, name, _, _) in enumerate(LEVELS):
+            btn = Button(act)
+            btn.setText(f"{name} ({w}×{h}, {m} мин)")
+            btn.setTextColor(Color.WHITE)
+            btn.setTextSize(15)
+            bg = GradientDrawable()
+            bg.setColor(Color.parseColor("#2D3748"))
+            bg.setCornerRadius(self.AU.dp(10))
+            btn.setBackground(bg)
+            params = LinearLayout.LayoutParams(-1, self.AU.dp(48))
+            params.topMargin = self.AU.dp(8)
+            btn.setLayoutParams(params)
+            btn.setOnClickListener(_Click(partial(self._start, i)))
+            layout.addView(btn)
+
+        builder.set_view(layout)
+        builder.show()
+        self.dialog = builder.get_dialog()
+
+    def _start(self, lvl, v=None):
+        if self.dialog: self.dialog.dismiss()
+        w, h, m, _, cell_sz, txt_sz = LEVELS[lvl]
+        self.game, self.time = Game(w, h, m), 0
+        frag = get_last_fragment()
+        if not frag: return
+        act = frag.getParentActivity()
+        if not self.vibrator: self.vibrator = act.getSystemService(Context.VIBRATOR_SERVICE)
+        
+        sz = self.AU.dp(cell_sz)
+        
+        builder = AlertDialogBuilder(act)
+        main = LinearLayout(act)
+        main.setOrientation(LinearLayout.VERTICAL)
+        main.setBackgroundColor(Color.parseColor("#1A1D26"))
+        
+        # Header
+        h_layout = LinearLayout(act)
+        h_layout.setOrientation(LinearLayout.HORIZONTAL)
+        h_layout.setGravity(Gravity.CENTER_VERTICAL)
+        h_layout.setPadding(self.AU.dp(10), self.AU.dp(8), self.AU.dp(10), self.AU.dp(8))
+        h_layout.setBackgroundColor(Color.parseColor("#2D3748"))
+        
+        exit_btn = TextView(act)
+        exit_btn.setText("✖")
+        exit_btn.setTextSize(16)
+        exit_btn.setTextColor(Color.WHITE)
+        exit_btn.setPadding(self.AU.dp(4), 0, self.AU.dp(8), 0)
+        exit_btn.setOnClickListener(_Click(lambda v: self._menu()))
+        h_layout.addView(exit_btn)
+        
+        self.flags_view = TextView(act)
+        self.flags_view.setTextSize(14)
+        self.flags_view.setTypeface(None, Typeface.BOLD)
+        self.flags_view.setTextColor(Color.parseColor("#FF6B6B"))
+        h_layout.addView(self.flags_view)
+        
+        spacer = View(act)
+        spacer.setLayoutParams(LinearLayout.LayoutParams(0,0,1.0))
+        h_layout.addView(spacer)
+        
+        self.status_view = TextView(act)
+        self.status_view.setTextSize(20)
+        self.status_view.setText("🙂")
+        self.status_view.setOnClickListener(_Click(lambda v: self._restart()))
+        h_layout.addView(self.status_view)
+        
+        spacer2 = View(act)
+        spacer2.setLayoutParams(LinearLayout.LayoutParams(0,0,1.0))
+        h_layout.addView(spacer2)
+        
+        self.timer_view = TextView(act)
+        self.timer_view.setTextSize(14)
+        self.timer_view.setTypeface(None, Typeface.BOLD)
+        self.timer_view.setTextColor(Color.parseColor("#FFD369"))
+        h_layout.addView(self.timer_view)
+        
+        main.addView(h_layout)
+        
+        # Scroll
+        v_scroll = ScrollView(act)
+        v_scroll.setFillViewport(True)
+        h_scroll = HorizontalScrollView(act)
+        h_scroll.setFillViewport(True)
+        grid_container = LinearLayout(act)
+        grid_container.setGravity(Gravity.CENTER)
+        grid_container.setBackgroundColor(Color.parseColor("#252932"))
+        
+        # Grid
+        grid = GridLayout(act)
+        grid.setColumnCount(self.game.w)
+        grid.setPadding(self.AU.dp(4), self.AU.dp(4), self.AU.dp(4), self.AU.dp(4))
+        
+        self.cells = [[None]*self.game.w for _ in range(self.game.h)]
+        bg_base = GradientDrawable()
+        bg_base.setCornerRadius(self.AU.dp(3))
+        bg_base.setColor(Color.parseColor("#3E4756"))
+        
+        for y in range(self.game.h):
+            for x in range(self.game.w):
+                btn = Button(act)
+                params = GridLayout.LayoutParams()
+                params.width = params.height = sz
+                params.setMargins(1,1,1,1)
+                btn.setLayoutParams(params)
+                btn.setPadding(0,0,0,0)
+                btn.setTextSize(txt_sz)
+                btn.setTypeface(None, Typeface.BOLD)
+                bg = bg_base.getConstantState().newDrawable().mutate()
+                btn.setBackground(bg)
+                btn.setOnClickListener(_Click(partial(self._click, x, y)))
+                btn.setOnLongClickListener(_Long(partial(self._long, x, y)))
+                grid.addView(btn)
+                self.cells[y][x] = btn
+        
+        grid_container.addView(grid)
+        h_scroll.addView(grid_container)
+        v_scroll.addView(h_scroll)
+        main.addView(v_scroll)
+        
+        builder.set_view(main)
+        builder.show()
+        self.dialog = builder.get_dialog()
+        self._update()
+
+    def _click(self, x, y, v):
+        if self.game.over: return
+        self._vib(8)
+        if self.game.first:
+            self.stop_event.clear()
+            self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
+            self.timer_thread.start()
+        self.game.reveal(x, y)
+        self._update()
+        if self.game.over: 
+            self._vib(50)
+            self._end()
+
+    def _long(self, x, y, v):
+        if self.game.over: return True
+        self._vib(15)
+        self.game.flag(x, y)
+        self._update()
+        return True
+
+    def _restart(self):
+        if self.game:
+            self.game.reset()
+            self.time = 0
+            self.stop_event.set()
+            if self.timer_thread: self.timer_thread.join(timeout=0.5)
+            self._update()
+
+    def _update(self):
+        if not self.game: return
+        self.flags_view.setText(f"🚩 {self.game.m - self.game.flags}")
+        self.status_view.setText("🥳" if self.game.won else "😵" if self.game.over else "🙂")
+        self.timer_view.setText(f"⏱ {self.time:03d}")
+        
+        for y in range(self.game.h):
+            for x in range(self.game.w):
+                btn, state, val = self.cells[y][x], self.game.visible[y][x], self.game.board[y][x]
+                bg = btn.getBackground()
+                if state == 1:
+                    bg.setColor(Color.parseColor("#C53030" if val == -1 else "#2D3748"))
+                    btn.setText("💣" if val == -1 else str(val) if val > 0 else "")
+                    if val > 0: btn.setTextColor(Color.parseColor(self.colors[val-1]))
+                elif state == 2:
+                    btn.setText("🚩")
+                    bg.setColor(Color.parseColor("#3E4756"))
+                else:
+                    btn.setText("")
+                    bg.setColor(Color.parseColor("#3E4756"))
+
+    def _timer_loop(self):
+        while not self.stop_event.is_set():
+            time.sleep(1)
+            self.time += 1
+            if self.timer_view: run_on_ui_thread(lambda: self.timer_view.setText(f"⏱ {self.time:03d}"))
+
+    def _end(self):
+        self.stop_event.set()
+        if self.timer_thread: self.timer_thread.join(timeout=0.5)
+        for r,c in self.game.mines:
+            self.game.visible[r][c] = 2 if self.game.won and not self.game.visible[r][c] else 1
+        self._update()
+
+    def _exit(self):
+        self.stop_event.set()
+        if self.timer_thread: self.timer_thread.join(timeout=0.5)
+        if self.dialog: self.dialog.dismiss()
+        self.dialog = None

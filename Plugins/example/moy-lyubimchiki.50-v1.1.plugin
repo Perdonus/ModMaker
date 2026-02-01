@@ -1,0 +1,500 @@
+__id__ = "myloves"
+__name__ = "My Loves"
+__author__ = "СвагаНеТута @swagnonher"
+__version__ = "1.2.0"
+__description__ = """Показывает, кто и какие подарки вам дарил. Поддерживает ручной ввод. Команды: .myloves, .manlove, .clearmyloves"""
+
+# -*- coding: utf-8 -*-
+
+import threading
+import traceback
+from collections import Counter, defaultdict
+from java.util import Locale
+
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from client_utils import (
+    get_last_fragment, 
+    send_message, 
+    send_request, 
+    get_user_config, 
+    get_messages_controller,
+    RequestCallback
+)
+from android_utils import run_on_ui_thread, log
+from ui.alert import AlertDialogBuilder
+from ui.bulletin import BulletinHelper
+from markdown_utils import parse_markdown
+from org.telegram.tgnet import TLRPC
+from org.telegram.messenger import ContactsController, MessagesController, UserConfig
+from org.telegram.ui.ActionBar import AlertDialog
+
+# --- Попытка импорта zwylib ---
+try:
+    import zwylib
+    ZWYLIB_AVAILABLE = True
+except ImportError:
+    ZWYLIB_AVAILABLE = False
+    zwylib = None
+
+# --- Метаданные плагина ---
+__min_version__ = "11.12.0"
+__icon__ = "DMJDuckX2/15"
+
+
+class LocalizationManager:
+    """Управляет строками локализации для плагина."""
+    def __init__(self):
+        self.language = Locale.getDefault().getLanguage()
+        self.strings = {
+            "ru": {
+                "loading_title": "Загрузка...",
+                "loading_message": "Получаю список ваших подарков...",
+                "error_generic": "Произошла ошибка: {error}",
+                "error_no_gifts": "💔 Вам еще никто не дарил подарки, и ручных записей нет.",
+                "error_unsupported_client": "Автополучение недоступно (клиент устарел). Ручных записей нет.\nИспользуйте `.manlove <emoji> <цена> <@юзер>` для добавления.",
+                "error_zwylib_missing": "⚠️ ZwyLib не найден. Ручное добавление и просмотр подарков невозможны.",
+                "error_network": "❌ Ошибка сети. Попробуйте позже.",
+                "error_api_unavailable": "❌ API подарков недоступен в данной версии клиента.",
+                "manlove_usage": "ℹ️ Использование: `.manlove <emoji> <цена> <@юзер>`\nДля нескольких: `.manlove ... / ...`",
+                "manlove_success": "✅ Добавлено {count} записей о подарках.",
+                "manlove_parse_error": "❌ Ошибка в формате записи: `{entry}`. Пропущено.",
+                "clear_success": "🗑️ Все ручные записи о подарках удалены.",
+                "result_header": "💖 Ваши Любимчики 💖",
+                "result_footer": "\n\n_Это все, кто дарил вам подарки._",
+                "result_combined": "\n\n🔄 _Показаны автоматически найденные и ручные записи._",
+                "result_manual_only": "\n\n📝 _Показаны только ручные записи._",
+                "result_auto_only": "\n\n🤖 _Показаны только автоматически найденные подарки._",
+                "unknown_user": "Неизвестный пользователь",
+                "fetching_offset": "Получение подарков... {current}/{total}",
+            },
+            "en": {
+                "loading_title": "Loading...",
+                "loading_message": "Fetching your gifts list...",
+                "error_generic": "An error occurred: {error}",
+                "error_no_gifts": "💔 Nobody has given you gifts yet, and no manual records exist.",
+                "error_unsupported_client": "Auto-detection unavailable (client outdated). No manual records.\nUse `.manlove <emoji> <price> <@user>` to add.",
+                "error_zwylib_missing": "⚠️ ZwyLib not found. Manual adding and viewing gifts is impossible.",
+                "error_network": "❌ Network error. Please try again later.",
+                "error_api_unavailable": "❌ Gifts API unavailable in this client version.",
+                "manlove_usage": "ℹ️ Usage: `.manlove <emoji> <price> <@user>`\nFor multiple: `.manlove ... / ...`",
+                "manlove_success": "✅ Added {count} gift records.",
+                "manlove_parse_error": "❌ Format error in record: `{entry}`. Skipped.",
+                "clear_success": "🗑️ All manual gift records cleared.",
+                "result_header": "💖 Your Loves 💖",
+                "result_footer": "\n\n_These are everyone who gave you gifts._",
+                "result_combined": "\n\n🔄 _Showing automatically found and manual records._",
+                "result_manual_only": "\n\n📝 _Showing only manual records._",
+                "result_auto_only": "\n\n🤖 _Showing only automatically found gifts._",
+                "unknown_user": "Unknown user",
+                "fetching_offset": "Fetching gifts... {current}/{total}",
+            }
+        }
+
+    def get_string(self, key, **kwargs):
+        """Получает локализованную строку по ключу."""
+        lang_strings = self.strings.get(self.language, self.strings.get("ru"))
+        template = lang_strings.get(key, key)
+        return template.format(**kwargs)
+
+
+class MyLovesPlugin(BasePlugin):
+    """
+    Плагин для отображения списка пользователей, подаривших подарки.
+    """
+    def __init__(self):
+        super().__init__()
+        self.loc = LocalizationManager()
+        self.progress_dialog: AlertDialog = None
+        self.manual_gifts_cache = None
+        self.is_fetching = False
+
+    def on_plugin_load(self):
+        """Вызывается при загрузке плагина."""
+        self.add_on_send_message_hook()
+        self._init_cache()
+        log(f"[{__id__}] плагин успешно загружен. ZwyLib доступен: {ZWYLIB_AVAILABLE}")
+
+    def _init_cache(self):
+        """Инициализирует кэш для ручного хранения подарков."""
+        if ZWYLIB_AVAILABLE:
+            # Используем список для хранения записей
+            self.manual_gifts_cache = zwylib.JsonCacheFile("myloves_manual_gifts", [])
+        else:
+            log(f"[{__id__}] ZwyLib не найден, ручной режим будет недоступен.")
+            
+    def on_send_message_hook(self, account, params):
+        """Перехватывает и обрабатывает исходящие сообщения."""
+        if not hasattr(params, 'message') or not isinstance(params.message, str):
+            return HookResult()
+
+        msg = params.message.strip()
+
+        if msg.lower() == ".myloves":
+            if self.is_fetching:
+                BulletinHelper.show_error("⏳ Уже выполняется загрузка подарков...")
+                return HookResult(strategy=HookStrategy.CANCEL)
+            
+            self.is_fetching = True
+            self._show_loading_dialog()
+            threading.Thread(target=self._handle_myloves_command, args=(params,)).start()
+            return HookResult(strategy=HookStrategy.CANCEL)
+
+        if msg.lower().startswith(".manlove "):
+            self._handle_manual_add(params)
+            return HookResult(strategy=HookStrategy.CANCEL)
+            
+        if msg.lower() == ".clearmyloves":
+            self._handle_clear_manual(params)
+            return HookResult(strategy=HookStrategy.CANCEL)
+
+        return HookResult()
+
+    def _handle_myloves_command(self, params):
+        """Основной обработчик команды .myloves."""
+        try:
+            # Пытаемся получить подарки через API
+            auto_gifts = self._fetch_star_gifts()
+            
+            # Получаем ручные записи
+            manual_gifts = self._get_manual_gifts()
+            
+            # Объединяем результаты
+            all_gifts = self._merge_gifts(auto_gifts, manual_gifts)
+            
+            if not all_gifts:
+                if auto_gifts is None:  # API недоступен
+                    error_msg = self.loc.get_string("error_unsupported_client")
+                else:
+                    error_msg = self.loc.get_string("error_no_gifts")
+                self._send_final_message(error_msg, params)
+            else:
+                result_type = self._determine_result_type(auto_gifts, manual_gifts)
+                final_message = self._format_gifts_message(all_gifts, result_type)
+                self._send_final_message(final_message, params)
+                
+        except Exception as e:
+            log(f"[{__id__}] Ошибка в _handle_myloves_command: {traceback.format_exc()}")
+            self._send_final_message(self.loc.get_string("error_generic", error=str(e)), params)
+        finally:
+            self.is_fetching = False
+            self._dismiss_loading_dialog()
+
+    def _fetch_star_gifts(self):
+        """Получает подарки через Telegram API."""
+        try:
+            # Проверяем доступность API методов
+            if not hasattr(TLRPC, 'TL_payments_getUserStarGifts'):
+                log(f"[{__id__}] TL_payments_getUserStarGifts недоступен")
+                return None
+            
+            current_user_id = get_user_config().getClientUserId()
+            messages_controller = get_messages_controller()
+            
+            # Создаем запрос
+            request = TLRPC.TL_payments_getUserStarGifts()
+            request.user_id = messages_controller.getInputUser(current_user_id)
+            request.offset = ""
+            request.limit = 100
+            
+            # Отправляем запрос синхронно
+            response = self._send_request_sync(request)
+            
+            if response is None:
+                return None
+            
+            # Обрабатываем ответ
+            return self._process_gifts_response(response)
+            
+        except Exception as e:
+            log(f"[{__id__}] Ошибка при получении подарков через API: {traceback.format_exc()}")
+            return None
+
+    def _send_request_sync(self, request):
+        """Отправляет запрос синхронно."""
+        response_holder = {'response': None, 'error': None, 'done': False}
+        
+        def callback(response, error):
+            response_holder['response'] = response
+            response_holder['error'] = error
+            response_holder['done'] = True
+        
+        try:
+            send_request(request, RequestCallback(callback))
+            
+            # Ждем ответа с таймаутом
+            timeout = 30  # 30 секунд
+            while not response_holder['done'] and timeout > 0:
+                threading.Event().wait(0.1)
+                timeout -= 0.1
+            
+            if response_holder['error']:
+                log(f"[{__id__}] API Error: {response_holder['error']}")
+                return None
+            
+            return response_holder['response']
+            
+        except Exception as e:
+            log(f"[{__id__}] Ошибка при отправке запроса: {traceback.format_exc()}")
+            return None
+
+    def _process_gifts_response(self, response):
+        """Обрабатывает ответ API с подарками."""
+        try:
+            if not response or not hasattr(response, 'gifts'):
+                return {}
+            
+            gifts = {}
+            user_map = {}
+            
+            # Создаем карту пользователей
+            if hasattr(response, 'users'):
+                for user in response.users:
+                    user_map[user.id] = user
+            
+            # Обрабатываем подарки
+            for gift in response.gifts:
+                if not hasattr(gift, 'from_id') or not hasattr(gift, 'gift'):
+                    continue
+                
+                sender_id = gift.from_id
+                gift_info = gift.gift
+                
+                if sender_id not in gifts:
+                    gifts[sender_id] = {
+                        'user': user_map.get(sender_id),
+                        'total_stars': 0,
+                        'gifts': []
+                    }
+                
+                # Добавляем информацию о подарке
+                if hasattr(gift_info, 'stars'):
+                    gifts[sender_id]['total_stars'] += gift_info.stars
+                
+                if hasattr(gift_info, 'sticker') and hasattr(gift_info.sticker, 'emoji'):
+                    gifts[sender_id]['gifts'].append(gift_info.sticker.emoji)
+                else:
+                    gifts[sender_id]['gifts'].append("🎁")  # Fallback emoji
+            
+            return gifts
+            
+        except Exception as e:
+            log(f"[{__id__}] Ошибка обработки ответа API: {traceback.format_exc()}")
+            return {}
+
+    def _get_manual_gifts(self):
+        """Получает ручно добавленные подарки."""
+        if not ZWYLIB_AVAILABLE or not self.manual_gifts_cache:
+            return {}
+        
+        try:
+            manual_data = self.manual_gifts_cache.content
+            if not manual_data:
+                return {}
+            
+            gifts = {}
+            
+            for gift in manual_data:
+                sender = gift['sender']
+                if sender not in gifts:
+                    gifts[sender] = {
+                        'user': sender,  # Для ручных записей "user" - строка
+                        'total_stars': 0,
+                        'gifts': []
+                    }
+                
+                gifts[sender]['total_stars'] += gift['stars']
+                gifts[sender]['gifts'].append(gift['slug'])
+            
+            return gifts
+            
+        except Exception as e:
+            log(f"[{__id__}] Ошибка получения ручных записей: {traceback.format_exc()}")
+            return {}
+
+    def _merge_gifts(self, auto_gifts, manual_gifts):
+        """Объединяет автоматически найденные и ручные подарки."""
+        all_gifts = {}
+        
+        # Добавляем автоматические подарки
+        if auto_gifts:
+            all_gifts.update(auto_gifts)
+        
+        # Добавляем ручные подарки
+        if manual_gifts:
+            for sender_key, manual_data in manual_gifts.items():
+                if sender_key in all_gifts:
+                    # Объединяем с существующими
+                    all_gifts[sender_key]['total_stars'] += manual_data['total_stars']
+                    all_gifts[sender_key]['gifts'].extend(manual_data['gifts'])
+                else:
+                    # Добавляем новые
+                    all_gifts[sender_key] = manual_data
+        
+        return all_gifts
+
+    def _determine_result_type(self, auto_gifts, manual_gifts):
+        """Определяет тип результата для вывода."""
+        has_auto = auto_gifts and len(auto_gifts) > 0
+        has_manual = manual_gifts and len(manual_gifts) > 0
+        
+        if has_auto and has_manual:
+            return "combined"
+        elif has_manual:
+            return "manual_only"
+        elif has_auto:
+            return "auto_only"
+        else:
+            return "none"
+
+    def _format_gifts_message(self, gifts_data, result_type):
+        """Создает отформатированный текст сообщения из данных о подарках."""
+        if not gifts_data:
+            return self.loc.get_string("error_no_gifts")
+        
+        # Сортируем по количеству звезд
+        sorted_gifts = sorted(gifts_data.items(), key=lambda item: item[1]['total_stars'], reverse=True)
+        
+        message_lines = [self.loc.get_string("result_header"), ""]
+        medals = ["🥇", "🥈", "🥉"]
+
+        for i, (sender_key, data) in enumerate(sorted_gifts):
+            user_info = data['user']
+            
+            # Получаем имя пользователя
+            if isinstance(user_info, str):
+                username = user_info
+            elif user_info and hasattr(user_info, 'username'):
+                username = f"@{user_info.username}" if user_info.username else ContactsController.formatName(user_info.first_name, user_info.last_name)
+            elif user_info and hasattr(user_info, 'first_name'):
+                username = ContactsController.formatName(user_info.first_name, getattr(user_info, 'last_name', ''))
+            else:
+                username = str(sender_key)
+            
+            total_stars = data['total_stars']
+            gift_counts = Counter(data['gifts'])
+            gifts_string = ", ".join([f"{gift}{f'x{count}' if count > 1 else ''}" for gift, count in gift_counts.items()])
+            
+            medal = medals[i] if i < len(medals) else f"**{i + 1}.**"
+            line = f"{medal} **{username}** — 🌟{total_stars}\n   ╰ {gifts_string}"
+            message_lines.append(line)
+
+        # Добавляем подпись в зависимости от типа результата
+        if result_type == "combined":
+            message_lines.append(self.loc.get_string("result_combined"))
+        elif result_type == "manual_only":
+            message_lines.append(self.loc.get_string("result_manual_only"))
+        elif result_type == "auto_only":
+            message_lines.append(self.loc.get_string("result_auto_only"))
+        else:
+            message_lines.append(self.loc.get_string("result_footer"))
+
+        return "\n".join(message_lines)
+
+    def _handle_manual_add(self, params):
+        """Обрабатывает команду .manlove."""
+        if not ZWYLIB_AVAILABLE:
+            BulletinHelper.show_error(self.loc.get_string("error_zwylib_missing"))
+            return
+
+        try:
+            content = params.message.split(" ", 1)[1]
+            entries = [e.strip() for e in content.split('/')]
+            
+            added_count = 0
+            for entry in entries:
+                parts = entry.split()
+                if len(parts) != 3:
+                    BulletinHelper.show_error(self.loc.get_string("manlove_parse_error", entry=entry))
+                    continue
+                
+                slug, stars_str, sender = parts
+                try:
+                    stars = int(stars_str)
+                    self.manual_gifts_cache.content.append({
+                        "slug": slug,
+                        "stars": stars,
+                        "sender": sender
+                    })
+                    added_count += 1
+                except ValueError:
+                    BulletinHelper.show_error(self.loc.get_string("manlove_parse_error", entry=entry))
+
+            if added_count > 0:
+                self.manual_gifts_cache.write()
+                BulletinHelper.show_success(self.loc.get_string("manlove_success", count=added_count))
+            else:
+                BulletinHelper.show_error(self.loc.get_string("manlove_usage"))
+                
+        except IndexError:
+            BulletinHelper.show_error(self.loc.get_string("manlove_usage"))
+        except Exception as e:
+            log(f"[{__id__}] Ошибка в _handle_manual_add: {traceback.format_exc()}")
+            BulletinHelper.show_error(self.loc.get_string("error_generic", error=str(e)))
+
+    def _handle_clear_manual(self, params):
+        """Обрабатывает команду .clearmyloves."""
+        if not ZWYLIB_AVAILABLE:
+            BulletinHelper.show_error(self.loc.get_string("error_zwylib_missing"))
+            return
+        
+        try:
+            self.manual_gifts_cache.content.clear()
+            self.manual_gifts_cache.write()
+            BulletinHelper.show_success(self.loc.get_string("clear_success"))
+        except Exception as e:
+            log(f"[{__id__}] Ошибка в _handle_clear_manual: {traceback.format_exc()}")
+            BulletinHelper.show_error(self.loc.get_string("error_generic", error=str(e)))
+
+    def _send_final_message(self, text, params):
+        """Отправляет итоговое сообщение, обрабатывая Markdown."""
+        try:
+            parsed_message = parse_markdown(text)
+            send_params = {
+                "peer": params.peer,
+                "message": parsed_message.text,
+                "entities": [e.to_tlrpc_object() for e in parsed_message.entities] if parsed_message.entities else None,
+                "replyToMsg": params.replyToMsg
+            }
+            send_message(send_params)
+        except Exception as e:
+            log(f"[{__id__}] Ошибка отправки Markdown: {traceback.format_exc()}")
+            # Fallback: отправляем без форматирования
+            send_message({
+                "peer": params.peer,
+                "message": text.replace("*", "").replace("_", ""),
+                "replyToMsg": params.replyToMsg
+            })
+
+    def _show_loading_dialog(self):
+        """Показывает диалог загрузки."""
+        def dialog_logic():
+            try:
+                if self.progress_dialog and self.progress_dialog.isShowing():
+                    return
+                    
+                fragment = get_last_fragment()
+                if fragment and fragment.getParentActivity():
+                    activity = fragment.getParentActivity()
+                    builder = AlertDialogBuilder(activity, AlertDialogBuilder.ALERT_TYPE_SPINNER)
+                    builder.set_title(self.loc.get_string("loading_title"))
+                    builder.set_message(self.loc.get_string("loading_message"))
+                    dialog_instance = builder.show()
+                    dialog_instance.set_cancelable(False)
+                    self.progress_dialog = dialog_instance.get_dialog()
+            except Exception as e:
+                log(f"[{__id__}] Ошибка отображения диалога: {e}\n{traceback.format_exc()}")
+        
+        run_on_ui_thread(dialog_logic)
+
+    def _dismiss_loading_dialog(self):
+        """Закрывает диалог загрузки."""
+        def dismiss_logic():
+            try:
+                if self.progress_dialog and self.progress_dialog.isShowing():
+                    self.progress_dialog.dismiss()
+            except Exception as e:
+                log(f"[{__id__}] Ошибка закрытия диалога: {e}\n{traceback.format_exc()}")
+            finally:
+                self.progress_dialog = None
+        
+        run_on_ui_thread(dismiss_logic)

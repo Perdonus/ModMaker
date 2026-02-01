@@ -1,0 +1,254 @@
+"""
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║  ███╗   ███╗ █████╗ ███╗   ██╗██████╗ ██████╗ ███████╗       ║
+║  ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔════╝       ║
+║  ██╔████╔██║███████║██╔██╗ ██║██║  ██║██████╔╝█████╗         ║
+║  ██║╚██╔╝██║██╔══██║██║╚██╗██║██║  ██║██╔══██╗██╔══╝         ║
+║  ██║ ╚═╝ ██║██║  ██║██║ ╚████║██████╔╝██║  ██║███████╗       ║
+║  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚══════╝       ║
+║                                                              ║  
+║         █████╗ ██╗                                           ║
+║        ██╔══██╗██║                                           ║
+║        ███████║██║    © 2024-2025                            ║
+║        ██╔══██║██║    Licensed Product                       ║
+║        ██║  ██║██║    All Rights Reserved                    ║
+║        ╚═╝  ╚═╝╚═╝                                           ║
+║                                                              ║
+║    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░║
+║    ░ Unauthorized use, reproduction or distribution ░        ║
+║    ░ of this software is strictly prohibited        ░        ║
+║    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+# -*- coding: utf-8 -*-
+
+import traceback
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class, get_private_field
+from android_utils import run_on_ui_thread, OnClickListener
+from ui.settings import Header, Switch, Divider
+from java.util import Locale
+
+# Импортируем необходимые классы Android и Telegram
+try:
+    from org.telegram.messenger import AndroidUtilities, R
+    from org.telegram.ui import ChatActivity
+    from org.telegram.ui.ActionBar import ActionBar, ActionBarMenu, ActionBarMenuItem
+    from org.telegram.ui.Components import ChatAvatarContainer, BackupImageView
+    from android.widget import LinearLayout, FrameLayout
+    from android.view import Gravity, View
+except ImportError:
+    pass
+
+__id__ = "centered_chat_header_mod_v2"
+__name__ = "CherificatorPCTG"
+__description__ = "Идеально выравнивает заголовок чата, перемещает аватар на кнопку меню и исправляет анимацию клика."
+__author__ = "СвагаНеТута @swagnonher"
+__version__ = "1.0"
+__min_version__ = "11.9.0"
+__icon__ = "filled_chatlist2"
+
+
+class Locales:
+    """Класс для управления локализацией текста в настройках."""
+    default = {
+        "SETTINGS_HEADER": "Centered Chat Header",
+        "ENABLE_SWITCH": "Enable pixel-perfect centered header",
+        "ENABLE_SWITCH_SUBTEXT": "Moves avatar over the menu button and fixes the click animation.",
+        "RESTART_INFO": "Please restart the chat or app for changes to take full effect."
+    }
+    ru = {
+        "SETTINGS_HEADER": "Идеально центрированная шапка",
+        "ENABLE_SWITCH": "Включить идеальное центрирование",
+        "ENABLE_SWITCH_SUBTEXT": "Перемещает аватар на кнопку меню и исправляет анимацию клика.",
+        "RESTART_INFO": "Пожалуйста, перезапустите чат или приложение, чтобы изменения вступили в силу."
+    }
+    
+    @staticmethod
+    def get(key: str) -> str:
+        lang = Locale.getDefault().getLanguage()
+        lang_dict = getattr(Locales, lang, Locales.default)
+        return lang_dict.get(key, Locales.default.get(key, key))
+
+
+class ActionBarHook(MethodHook):
+    """
+    Класс-хук для перехвата и модификации ActionBar в ChatActivity.
+    """
+    PROCESSED_TAG_KEY = 0x7E0D0001
+    CLONED_AVATAR_TAG_KEY = 0x7E0D0002
+
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
+
+    def after_hooked_method(self, param):
+        if not self.plugin.get_setting("enabled", True):
+            run_on_ui_thread(lambda: self.restore_action_bar_layout(param), delay=50)
+            return
+        run_on_ui_thread(lambda: self.rearrange_action_bar_layout(param), delay=50)
+
+    def rearrange_action_bar_layout(self, param):
+        try:
+            chat_activity = param.thisObject
+            action_bar = chat_activity.getActionBar()
+
+            avatar_container = self.find_view_by_class(action_bar, "org.telegram.ui.Components.ChatAvatarContainer")
+            if not avatar_container: return
+
+            original_avatar_view = get_private_field(avatar_container, "avatarImageView")
+            title_view = get_private_field(avatar_container, "titleTextView")
+            subtitle_view = get_private_field(avatar_container, "subtitleTextView")
+            text_container = title_view.getParent() if title_view else None
+
+            if not all([original_avatar_view, title_view, subtitle_view, text_container]): return
+
+            if action_bar.getTag(self.PROCESSED_TAG_KEY):
+                cloned_avatar = action_bar.findViewWithTag(self.CLONED_AVATAR_TAG_KEY)
+                if cloned_avatar:
+                    drawable = original_avatar_view.getImageReceiver().getDrawable()
+                    if drawable: cloned_avatar.setImageDrawable(drawable)
+                return
+
+            original_avatar_view.setVisibility(View.GONE)
+
+            cloned_avatar = BackupImageView(chat_activity.getParentActivity())
+            cloned_avatar.setTag(self.CLONED_AVATAR_TAG_KEY, True)
+            
+            drawable = original_avatar_view.getImageReceiver().getDrawable()
+            if drawable: cloned_avatar.setImageDrawable(drawable)
+            
+            size = AndroidUtilities.dp(69)
+            cloned_avatar.setRoundRadius(size // 0.5)
+            
+            # --- ИСПРАВЛЕНИЕ АНИМАЦИИ КЛИКА ---
+            def on_avatar_click():
+                try:
+                    # Находим настоящее меню и программно его открываем
+                    menu = get_private_field(action_bar, "menu")
+                    if menu:
+                        options_item = menu.getItem(R.id.menu_item_options)
+                        if options_item:
+                            options_item.toggleSubMenu()
+                except Exception as e:
+                    self.plugin.log(f"Failed to toggle menu: {e}")
+            
+            cloned_avatar.setOnClickListener(OnClickListener(on_avatar_click))
+
+            lp = FrameLayout.LayoutParams(size, size)
+            lp.gravity = Gravity.END | Gravity.CENTER_VERTICAL
+            lp.rightMargin = AndroidUtilities.dp(8)
+            action_bar.addView(cloned_avatar, lp)
+
+            # --- ИСПРАВЛЕНИЕ ПОЗИЦИОНИРОВАНИЯ ---
+            # Смещаем аватар ниже
+            cloned_avatar.setTranslationY(AndroidUtilities.dp(5))
+            # Смещаем текст левее
+            text_container.setTranslationX(-AndroidUtilities.dp(8))
+            
+            text_lp = text_container.getLayoutParams()
+            if isinstance(text_lp, FrameLayout.LayoutParams):
+                text_lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+                text_lp.gravity = Gravity.CENTER_VERTICAL
+                margin = AndroidUtilities.dp(72)
+                text_lp.leftMargin = margin
+                text_lp.rightMargin = margin
+                text_container.setLayoutParams(text_lp)
+            
+            if hasattr(title_view, 'setGravity'): title_view.setGravity(Gravity.CENTER)
+            if hasattr(subtitle_view, 'setGravity'): subtitle_view.setGravity(Gravity.CENTER)
+
+            action_bar.setTag(self.PROCESSED_TAG_KEY, True)
+            action_bar.requestLayout()
+            self.plugin.log(f"Header layout successfully realigned for chat: {chat_activity.getDialogId()}")
+
+        except Exception:
+            self.plugin.log(f"Error rearranging action bar layout:\n{traceback.format_exc()}")
+
+    def restore_action_bar_layout(self, param):
+        """Пытается вернуть ActionBar в исходное состояние при выключении плагина."""
+        try:
+            chat_activity = param.thisObject
+            action_bar = chat_activity.getActionBar()
+            if not action_bar.getTag(self.PROCESSED_TAG_KEY): return
+
+            cloned_avatar = action_bar.findViewWithTag(self.CLONED_AVATAR_TAG_KEY)
+            if cloned_avatar:
+                action_bar.removeView(cloned_avatar)
+
+            avatar_container = self.find_view_by_class(action_bar, "org.telegram.ui.Components.ChatAvatarContainer")
+            if avatar_container:
+                original_avatar_view = get_private_field(avatar_container, "avatarImageView")
+                if original_avatar_view: original_avatar_view.setVisibility(View.VISIBLE)
+                
+                title_view = get_private_field(avatar_container, "titleTextView")
+                text_container = title_view.getParent() if title_view else None
+                if text_container:
+                    # Сбрасываем смещение
+                    text_container.setTranslationX(0)
+            
+            action_bar.setTag(self.PROCESSED_TAG_KEY, None)
+            action_bar.requestLayout()
+            self.plugin.log("Restored original action bar layout.")
+        except Exception:
+            self.plugin.log(f"Failed to restore action bar layout: {traceback.format_exc()}")
+
+    def find_view_by_class(self, root_view, class_name):
+        """Вспомогательная функция для поиска View по имени класса."""
+        TargetClass = find_class(class_name)
+        if not TargetClass or not hasattr(root_view, 'getChildCount'): return None
+        for i in range(root_view.getChildCount()):
+            child = root_view.getChildAt(i)
+            if isinstance(child, TargetClass):
+                return child
+        return None
+
+class CenteredChatHeaderPlugin(BasePlugin):
+    """
+    Главный класс плагина.
+    """
+    def __init__(self):
+        super().__init__()
+        self.hook_ref = None
+
+    def on_plugin_load(self):
+        if not self.get_setting("enabled", True):
+            self.log("Plugin is disabled in settings, skipping hook.")
+            return
+            
+        try:
+            ChatActivityClass = find_class("org.telegram.ui.ChatActivity")
+            on_resume_method = ChatActivityClass.getClass().getDeclaredMethod("onResume")
+            
+            self.hook_ref = self.hook_method(on_resume_method, ActionBarHook(self))
+            if self.hook_ref: self.log("Successfully hooked ChatActivity.onResume()")
+            else: self.log("Failed to apply hook to ChatActivity.onResume()")
+        except Exception:
+            self.log(f"Failed to hook ChatActivity:\n{traceback.format_exc()}")
+
+    def on_plugin_unload(self):
+        if self.hook_ref:
+            self.unhook_method(self.hook_ref)
+            self.log("Unhooked from ChatActivity.onResume()")
+    
+    def create_settings(self):
+        return [
+            Header(text=Locales.get("SETTINGS_HEADER")),
+            Switch(
+                key="enabled",
+                text=Locales.get("ENABLE_SWITCH"),
+                subtext=Locales.get("ENABLE_SWITCH_SUBTEXT"),
+                default=True,
+                on_change=self.on_setting_changed
+            ),
+            Divider(),
+            Header(text=Locales.get("RESTART_INFO"))
+        ]
+
+    def on_setting_changed(self, value):
+        from ui.bulletin import BulletinHelper
+        BulletinHelper.show_info(Locales.get("RESTART_INFO"))
+        self.on_plugin_unload()
+        if value:
+            self.on_plugin_load()

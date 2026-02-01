@@ -1,0 +1,195 @@
+import requests
+import time
+from typing import Dict, Any
+
+from android_utils import log, run_on_ui_thread
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from client_utils import run_on_queue, send_message
+from ui.alert import AlertDialogBuilder
+
+__id__ = "temp_mail"
+__name__ = "Temp Mail"
+__description__ = "Временная почта с уведомлениями [.mail]"
+__author__ = "@extraplugin"
+__version__ = "1.0.0"
+__icon__ = "exteraPlugins/1"
+__min_version__ = "11.12.0"
+
+class TempMailPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.email_accounts: Dict[str, Dict] = {}
+        self.progress_dialog = None
+
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+        log("Temp Mail plugin loaded")
+
+    def on_plugin_unload(self):
+        log("Temp Mail plugin unloaded")
+
+    def _create_email_account(self):
+        """Создание временного email аккаунта"""
+        try:
+
+            domains_resp = requests.get("https://api.mail.tm/domains", timeout=10)
+            domains = domains_resp.json()["hydra:member"]
+            domain = domains[0]["domain"]
+
+
+            local_part = f"user{int(time.time())}"
+            email = f"{local_part}@{domain}"
+            password = "TempPass123!"
+
+
+            account_resp = requests.post("https://api.mail.tm/accounts", json={
+                "address": email,
+                "password": password
+            }, timeout=10)
+
+            if account_resp.status_code not in [200, 201]:
+                return None, "Ошибка создания аккаунта"
+
+
+            token_resp = requests.post("https://api.mail.tm/token", json={
+                "address": email,
+                "password": password
+            }, timeout=10)
+
+            token_data = token_resp.json()
+            token = token_data.get("token")
+            if not token:
+                return None, "Ошибка получения токена"
+
+            account_data = {
+                'email': email,
+                'password': password,
+                'token': token,
+                'domain': domain,
+                'created_at': time.time()
+            }
+
+            return account_data, None
+
+        except Exception as e:
+            return None, f"Ошибка: {str(e)}"
+
+    def _check_emails_once(self, token: str, peer_id: Any):
+        """Однократная проверка писем"""
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            resp = requests.get("https://api.mail.tm/messages", headers=headers, timeout=10)
+            messages = resp.json()["hydra:member"]
+            
+            for msg in messages:
+                message_resp = requests.get(f"https://api.mail.tm/messages/{msg['id']}", 
+                                          headers=headers, timeout=10)
+                message_data = message_resp.json()
+                
+                self._send_email_notification(message_data, peer_id)
+                
+            return True, None
+            
+        except Exception as e:
+            return False, f"Ошибка проверки: {str(e)}"
+
+    def _send_email_notification(self, message_data: Dict, peer_id: Any):
+        """Отправка уведомления о письме"""
+        from_addr = message_data['from']['address']
+        subject = message_data['subject'] or "Без темы"
+        text_preview = message_data['text'][:100] + "..." if len(message_data['text']) > 100 else message_data['text']
+        
+        message = f"📧 Новое письмо!\n\n"
+        message += f"От: {from_addr}\n"
+        message += f"Тема: {subject}\n"
+        message += f"Превью: {text_preview}"
+
+        message_params = {
+            "message": message,
+            "peer": peer_id
+        }
+        
+        run_on_ui_thread(lambda: send_message(message_params))
+
+    def on_send_message_hook(self, account: int, params: Any) -> HookResult:
+        if not isinstance(params.message, str) or not params.message.strip().startswith(".mail"):
+            return HookResult()
+
+        try:
+            command = params.message.strip().lower()
+            
+            if command == ".mail":
+                # Показываем прогресс
+                from client_utils import get_last_fragment
+                current_fragment = get_last_fragment()
+                if current_fragment:
+                    activity = current_fragment.getParentActivity()
+                    if activity:
+                        self.progress_dialog = AlertDialogBuilder(
+                            activity,
+                            AlertDialogBuilder.ALERT_TYPE_SPINNER
+                        )
+                        self.progress_dialog.set_title("Создание почты")
+                        self.progress_dialog.set_message("Создаем временный email...")
+                        self.progress_dialog.set_cancelable(False)
+                        self.progress_dialog.show()
+
+                def _create_email():
+                    account_data, error = self._create_email_account()
+                    
+                    def _finish():
+                        if self.progress_dialog:
+                            self.progress_dialog.dismiss()
+                            self.progress_dialog = None
+                        
+                        if error:
+                            send_message({
+                                "message": f"❌ {error}",
+                                "peer": params.peer
+                            })
+                        else:
+
+                            chat_id = str(params.peer)
+                            self.email_accounts[chat_id] = account_data
+                            
+
+                            run_on_queue(lambda: self._check_emails_once(account_data['token'], params.peer))
+                            
+                            send_message({
+                                "message": f"✅ Временный email создан!\n\n📧: {account_data['email']}\n🔑: {account_data['password']}\n\nИспользуйте .mail check для проверки писем",
+                                "peer": params.peer
+                            })
+
+                    run_on_ui_thread(_finish)
+
+                run_on_queue(_create_email)
+                return HookResult(strategy=HookStrategy.CANCEL)
+                
+            elif command == ".mail check":
+                chat_id = str(params.peer)
+                if chat_id in self.email_accounts:
+                    account_data = self.email_accounts[chat_id]
+                    run_on_queue(lambda: self._check_emails_once(account_data['token'], params.peer))
+                    params.message = "Проверяем письма..."
+                else:
+                    params.message = "Сначала создайте email командой .mail"
+                return HookResult(strategy=HookStrategy.MODIFY, params=params)
+                
+            elif command == ".mail info":
+                chat_id = str(params.peer)
+                if chat_id in self.email_accounts:
+                    account_data = self.email_accounts[chat_id]
+                    params.message = f"📧 Ваш email:\n{account_data['email']}\n🔑 Пароль: {account_data['password']}"
+                else:
+                    params.message = "Сначала создайте email командой .mail"
+                return HookResult(strategy=HookStrategy.MODIFY, params=params)
+
+        except Exception as e:
+            log(f"TempMail error: {str(e)}")
+            if self.progress_dialog:
+                run_on_ui_thread(lambda: self.progress_dialog.dismiss())
+                self.progress_dialog = None
+            params.message = f"Ошибка: {str(e)}"
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+            
+        return HookResult()

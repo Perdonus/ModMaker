@@ -1,0 +1,193 @@
+
+import random
+import weakref
+from typing import Optional, List, Any
+
+from base_plugin import BasePlugin
+from java import dynamic_proxy
+from android_utils import log, run_on_ui_thread
+from client_utils import get_last_fragment
+from ui.settings import Header, Selector, Divider, Switch
+from ui.bulletin import BulletinHelper
+
+try:
+    from android.content import Context
+    from android.os import Vibrator, VibrationEffect, Build
+    from org.telegram.messenger import NotificationCenter, UserConfig
+    ANDROID_IMPORTED = True
+except ImportError:
+    ANDROID_IMPORTED = False
+
+__id__ = "vibrator_plugin"
+__name__ = "Вибратор:}"
+__description__ = "Продвинутый плагин для вибрации с множеством режимов и функцией вибрации при сообщениях. То что надо для твоей подружке))"
+__author__ = "@JavaScript_XD"
+__version__ = "1.0"
+__icon__ = "epwpew/4"
+__min_version__ = "1.0"
+
+class VibratorPlugin(BasePlugin):
+    class MessageListener(dynamic_proxy(NotificationCenter.NotificationCenterDelegate)):
+        def __init__(self, plugin):
+            super().__init__()
+            self.plugin_ref = weakref.ref(plugin)
+
+        def didReceivedNotification(self, id, account, args):
+            plugin = self.plugin_ref()
+            if not plugin or id != NotificationCenter.didReceiveNewMessages:
+                return
+            
+            if plugin.get_setting("vibrate_on_msg", False):
+                plugin._trigger_short_vibration()
+
+    def __init__(self):
+        super().__init__()
+        self.vibrator: Optional[Vibrator] = None
+        self.listener: Optional[Any] = None
+
+    def on_plugin_load(self):
+        if ANDROID_IMPORTED:
+            self.listener = self.MessageListener(self)
+            run_on_ui_thread(lambda: NotificationCenter.getInstance(UserConfig.selectedAccount).addObserver(
+                self.listener, NotificationCenter.didReceiveNewMessages
+            ))
+
+    def on_plugin_unload(self):
+        if self.listener:
+            run_on_ui_thread(lambda: NotificationCenter.getInstance(UserConfig.selectedAccount).removeObserver(
+                self.listener, NotificationCenter.didReceiveNewMessages
+            ))
+        
+        vibrator = self._get_vibrator()
+        if vibrator:
+            try: vibrator.cancel()
+            except: pass
+
+    def _get_vibrator(self) -> Optional[Vibrator]:
+        if not ANDROID_IMPORTED: return None
+        if self.vibrator: return self.vibrator
+        try:
+            fragment = get_last_fragment()
+            if not fragment: return None
+            activity = fragment.getParentActivity()
+            if not activity: return None
+            self.vibrator = activity.getSystemService(Context.VIBRATOR_SERVICE)
+            return self.vibrator
+        except:
+            return None
+
+    def _trigger_short_vibration(self):
+        vibrator = self._get_vibrator()
+        if not vibrator: return
+        try:
+            if Build.VERSION.SDK_INT >= 26:
+                vibrator.vibrate(VibrationEffect.createOneShot(100, VibrationEffect.DEFAULT_AMPLITUDE))
+            else:
+                vibrator.vibrate(100)
+        except:
+            pass
+
+    def _on_vibration_toggle(self, new_value: bool):
+        vibrator = self._get_vibrator()
+        if not vibrator:
+            self.set_setting("is_active", False, reload_settings=True)
+            return
+
+        if new_value:
+            mode = self.get_setting("vibration_mode", 0)
+            timer = self.get_setting("timer_duration", 0)
+            intensity = self.get_setting("vibration_intensity", 1)
+
+            amps = [80, 160, 255]
+            amp = amps[intensity] if intensity < len(amps) else 160
+
+            patterns = {
+                0: [0, 1000], # Постоянная
+                1: [0, 500, 500, 500], # Пульс
+                2: [0, 100, 100, 100, 100, 100], # Быстрый
+                3: [0, 100, 500, 100, 500], # Сердцебиение
+                4: [0, 200, 100, 400, 100, 600], # Нарастающий
+                5: [0, 50, 50, 50, 50, 50, 500, 50, 50, 50], # SOS
+                6: [0] + [random.randint(50, 500) for _ in range(10)] # Хаос
+            }
+            
+            pattern = patterns.get(mode, [0, 1000])
+            
+            try:
+                if Build.VERSION.SDK_INT >= 26:
+                    if mode == 0:
+                        effect = VibrationEffect.createOneShot(3600000, amp)
+                        vibrator.vibrate(effect)
+                    else:
+                        amplitudes = [0 if i % 2 == 0 else amp for i in range(len(pattern))]
+                        effect = VibrationEffect.createWaveform(pattern, amplitudes, 0)
+                        vibrator.vibrate(effect)
+                else:
+                    vibrator.vibrate(pattern, 0)
+                
+                BulletinHelper.show_info("Вибрация запущена")
+            except Exception as e:
+                log(f"Ошибка вибрации: {e}")
+                self.set_setting("is_active", False, reload_settings=True)
+                return
+
+            durations = [0, 60000, 300000, 600000, 1800000, 3600000]
+            delay = durations[timer] if timer < len(durations) else 0
+            if delay > 0:
+                run_on_ui_thread(self._scheduled_stop, delay)
+        else:
+            try:
+                vibrator.cancel()
+                BulletinHelper.show_info("Вибрация остановлена")
+            except:
+                pass
+
+    def _scheduled_stop(self):
+        vibrator = self._get_vibrator()
+        if vibrator:
+            try: vibrator.cancel()
+            except: pass
+        self.set_setting("is_active", False, reload_settings=True)
+        BulletinHelper.show_info("Таймер завершен")
+
+    def create_settings(self) -> List[Any]:
+        return [
+            Header(text="Настройки вибрации"),
+            Selector(
+                key="vibration_mode",
+                text="Режим",
+                default=0,
+                items=["Постоянный", "Пульс", "Быстрый", "Сердцебиение", "Нарастающий", "SOS", "Хаос"],
+                icon="msg_mic1"
+            ),
+            Selector(
+                key="vibration_intensity",
+                text="Интенсивность",
+                default=1,
+                items=["Низкая", "Средняя", "Высокая"],
+                icon="msg_stats"
+            ),
+            Selector(
+                key="timer_duration",
+                text="Таймер автостопа",
+                default=0,
+                items=["Бесконечно", "1 мин", "5 мин", "10 мин", "30 мин", "1 час"],
+                icon="msg_clock"
+            ),
+            Divider(text="Дополнительные функции"),
+            Switch(
+                key="vibrate_on_msg",
+                text="Вибрация при сообщениях",
+                default=False,
+                subtext="Короткая вибрация при получении нового сообщения",
+                icon="msg_notif"
+            ),
+            Divider(text="Активируйте переключатель для запуска вибрации."),
+            Switch(
+                key="is_active",
+                text="Включить вибрацию",
+                default=False,
+                on_change=self._on_vibration_toggle,
+                icon="msg_vibrate"
+            )
+        ]

@@ -1,0 +1,1525 @@
+__id__="msg2html"
+__name__="Msg2HTML"
+__description__=".html [N] [nomedia] [noavatars] — экспорт чата в HTML"
+__author__="@nokirby"
+__version__="0.1.0"
+__icon__="tomocracy/4"
+__min_version__="11.12.0"
+
+try:
+    from android_utils import log
+    log("[Msg2HTML] Plugin file is being executed!")
+except:
+    print("[Msg2HTML] Plugin file is being executed!")
+
+from base_plugin import BasePlugin, HookResult, HookStrategy, MenuItemData, MenuItemType
+from android_utils import run_on_ui_thread, log
+from client_utils import run_on_queue, RequestCallback, send_request, get_last_fragment
+from ui.bulletin import BulletinHelper
+from org.telegram.tgnet import TLRPC
+from org.telegram.messenger import MessagesController, DialogObject, SendMessagesHelper, AccountInstance, UserConfig, FileLoader
+from android.net import Uri
+from java.io import File
+from java.util import ArrayList
+import os
+import time
+import base64
+import html
+import shutil
+import traceback
+import zipfile
+from android.content import Intent, ComponentName
+from android.net import Uri
+
+try:
+    from ui.settings import Header, Switch, Input, Text
+    _SETTINGS_AVAILABLE = True
+except Exception:
+    _SETTINGS_AVAILABLE = False
+
+_TRANSLATIONS = {
+    "en": {
+        # Menu items
+        "menu_export": "📄 Export to HTML",
+        "menu_export_desc": "Export chat messages to HTML file",
+        "menu_view": "📁 View Last HTML",
+        "menu_view_desc": "Open last exported HTML file",
+        "menu_view_drawer": "📁 View Last HTML Export",
+        "menu_view_drawer_desc": "Open last HTML export in file manager",
+
+        # Settings
+        "settings_header": "Msg2HTML",
+        "settings_media": "Embed media by default",
+        "settings_avatars": "Embed avatars by default",
+        "settings_count": "Default message limit",
+        "settings_inline": "Max inline image size, KB",
+        "settings_help": "Tip: .html 250 nomedia — export; .htmlsend — send last export; Reply + .html — export from replied message",
+
+        # Messages
+        "export_starting": "Starting HTML export ({} messages)...",
+        "export_saved": "Export saved ({} msgs):\n{}",
+        "export_finished": "Export completed",
+        "file_not_found": "HTML file not found",
+        "no_chat": "Cannot get current chat",
+        "no_files": "No HTML files found",
+        "no_exports": "📄 No HTML exports found\n\nTip: Export a chat first using .html command or the export menu",
+        "opening_file": "📁 Opening: {}\n🕒 Created: {}\n📊 Size: {} bytes",
+        "opened_folder": "📁 Opened Downloads/Msg2HTML folder",
+        "file_manager_opened": "File manager opened\nNavigate to: Downloads/Msg2HTML/",
+        "copy_to_downloads": "HTML file copied to Downloads: {}",
+        "send_success": "HTML file sent successfully!",
+        "send_error": "Send error: {}",
+        "export_error": "Export failed: {}",
+        "view_error": "View failed: {}",
+        "plugin_working": "Msg2HTML plugin is working!",
+        "reply_export_start": "📍 Reply-based export started\n📊 {} messages from replied message\n🖼️ Media: {}",
+        "reply_export_from": "Starting export from replied message ID: {}",
+        "file_info": "📁 {}\n📊 Size: {} bytes\n📂 Location: Downloads/{}/\n\n💡 Open your file manager and navigate to Downloads/Msg2HTML folder",
+        "export_info": "📄 HTML Export ({})\n\nFile saved to: {}\n\nSize: {} bytes",
+        "export_complete": "*Export completed*\n\n**File:** {}\n**Size:** {} \n**Path:** {}\n\n**Preview:**\n```html\n{}...\n```\n\n*File saved in Downloads/Msg2HTML folder*"
+    },
+    "ru": {
+        # Menu items
+        "menu_export": "📄 Экспорт в HTML",
+        "menu_export_desc": "Экспорт сообщений чата в HTML файл",
+        "menu_view": "📁 Просмотр HTML",
+        "menu_view_desc": "Открыть последний экспортированный HTML файл",
+        "menu_view_drawer": "📁 Просмотр HTML экспорта",
+        "menu_view_drawer_desc": "Открыть последний HTML экспорт в файловом менеджере",
+
+        # Settings
+        "settings_header": "Msg2HTML",
+        "settings_media": "Вшивать медиа по умолчанию",
+        "settings_avatars": "Вшивать аватарки по умолчанию",
+        "settings_count": "Лимит сообщений по умолчанию",
+        "settings_inline": "Макс размер inline-изображения, КБ",
+        "settings_help": "Подсказка: .html 250 nomedia — экспорт; .htmlsend — отправить последний экспорт; Реплай + .html — экспорт с сообщения",
+
+        # Messages
+        "export_starting": "Начинаем HTML экспорт ({} сообщений)...",
+        "export_saved": "Экспорт сохранён ({} сообщ.):\n{}",
+        "export_finished": "Экспорт завершён",
+        "file_not_found": "HTML файл не найден",
+        "no_chat": "Не удается получить текущий чат",
+        "no_files": "HTML файлы не найдены",
+        "no_exports": "📄 HTML экспорты не найдены\n\nСовет: Сначала экспортируйте чат командой .html или через меню экспорта",
+        "opening_file": "📁 Открываем: {}\n🕒 Создан: {}\n📊 Размер: {} байт",
+        "opened_folder": "📁 Открыта папка Downloads/Msg2HTML",
+        "file_manager_opened": "Файловый менеджер открыт\nПерейдите в: Downloads/Msg2HTML/",
+        "copy_to_downloads": "HTML файл скопирован в Downloads: {}",
+        "send_success": "HTML файл успешно отправлен!",
+        "send_error": "Ошибка отправки: {}",
+        "export_error": "Ошибка экспорта: {}",
+        "view_error": "Ошибка просмотра: {}",
+        "plugin_working": "Плагин Msg2HTML работает!",
+        "reply_export_start": "📍 Экспорт от сообщения\n📊 {} сообщений от реплая\n🖼️ Медиа: {}",
+        "reply_export_from": "Начинаем экспорт с сообщения ID: {}",
+        "file_info": "📁 {}\n📊 Размер: {} байт\n📂 Местоположение: Downloads/{}/\n\n💡 Откройте файловый менеджер и перейдите в папку Downloads/Msg2HTML",
+        "export_info": "📄 HTML Экспорт ({})\n\nФайл сохранён в: {}\n\nРазмер: {} байт",
+        "export_complete": "*Экспорт окончен*\n\n**Файл:** {}\n**Размер:** {} \n**Путь к файлу:** {}\n\n**Превью:**\n```html\n{}...\n```\n\n*Файл сохранён в папке Downloads/Msg2HTML*"
+    }
+}
+
+
+_cached_language = None
+
+def _get_user_language():
+    global _cached_language
+
+    if _cached_language is not None:
+        return _cached_language
+
+    try:
+        from org.telegram.messenger import LocaleController, ApplicationLoader
+
+        try:
+            locale_controller = LocaleController.getInstance()
+            current_locale = locale_controller.getCurrentLocale()
+            if current_locale:
+                lang_code = current_locale.getLanguage()
+                _cached_language = "ru" if lang_code.startswith("ru") else "en"
+                log(f"[Msg2HTML] Detected language: {_cached_language} (Telegram)")
+                return _cached_language
+        except Exception:
+            pass
+
+        try:
+            context = ApplicationLoader.applicationContext
+            config = context.getResources().getConfiguration()
+            if hasattr(config, 'locale') and config.locale:
+                lang = config.locale.getLanguage()
+                _cached_language = "ru" if lang.startswith("ru") else "en"
+                log(f"[Msg2HTML] Detected language: {_cached_language} (Android)")
+                return _cached_language
+        except Exception:
+            pass
+
+        _cached_language = "en"
+        log("[Msg2HTML] Using default language: en")
+        return _cached_language
+
+    except Exception as e:
+        log(f"[Msg2HTML] Language detection error: {e}")
+        _cached_language = "en"
+        return _cached_language
+
+def _t(key, *args):
+    try:
+        lang = _get_user_language()
+        text = _TRANSLATIONS.get(lang, _TRANSLATIONS["en"]).get(key, key)
+        if args:
+            return text.format(*args)
+        return text
+    except Exception as e:
+        log(f"[Msg2HTML] Translation error for key '{key}': {e}")
+        return key
+
+def _esc(s):
+    try:
+        return html.escape("" if s is None else str(s))
+    except Exception:
+        return ""
+
+def _to_list(j):
+    try:
+        if j is None:
+            return []
+        if hasattr(j, "toArray"):
+            return list(j.toArray())
+        if isinstance(j, (list, tuple)):
+            return list(j)
+        return [j]
+    except Exception:
+        return []
+
+def _m_id(m):
+    try:
+        return int(getattr(m, "id"))
+    except Exception:
+        try:
+            return int(m.getId())
+        except Exception:
+            return 0
+
+def _m_date(m):
+    try:
+        return int(getattr(m, "date"))
+    except Exception:
+        try:
+            return int(m.getDate())
+        except Exception:
+            return 0
+
+def _m_text(m):
+    for k in ("message", "messageText", "caption"):
+        v = getattr(m, k, None)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+def _best_photo_size(photo):
+    try:
+        sizes = getattr(photo, "sizes", None)
+        if not sizes:
+            return None
+        best = None
+        maxw = -1
+        for s in _to_list(sizes):
+            w = getattr(s, "w", 0) or getattr(s, "width", 0) or 0
+            if w >= maxw and (getattr(s, "type", "") != "i"):
+                best = s
+                maxw = w
+        return best
+    except Exception:
+        return None
+
+def _file_b64(path, limit_bytes):
+    try:
+        if not path or not os.path.exists(path):
+            return None
+
+        file_size = os.path.getsize(path)
+        if file_size > limit_bytes or file_size == 0:
+            return None
+
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except Exception as e:
+        log(f"[Msg2HTML] File b64 encoding failed for {path}: {e}")
+        return None
+
+def _path_exists(p):
+    try:
+        return p and os.path.exists(p)
+    except Exception:
+        return False
+
+def _wait_file(path, ms):
+    start = time.time()
+    timeout = ms / 1000.0
+    while time.time() - start < timeout:
+        if _path_exists(path):
+            return True
+        time.sleep(0.1)
+    return _path_exists(path)
+
+def _avatar_path(acc, user):
+    try:
+        ph = getattr(user, "photo", None)
+        if not ph:
+            return None
+        loc = getattr(ph, "photo_small", None) or getattr(ph, "photo_big", None)
+        if not loc:
+            return None
+        fl = FileLoader.getInstance(acc)
+        f = fl.getPathToAttach(loc, True)
+        return f.getAbsolutePath() if f else None
+    except Exception:
+        return None
+
+def _download_avatar(acc, user, wait_ms=2000):
+    try:
+        p = _avatar_path(acc, user)
+        if _path_exists(p):
+            return p
+
+        fl = FileLoader.getInstance(acc)
+        ph = getattr(user, "photo", None)
+        if not ph:
+            return None
+        loc = getattr(ph, "photo_small", None) or getattr(ph, "photo_big", None)
+        if not loc:
+            return None
+        try:
+            fl.loadFile(loc, None, 0, 1)
+            if p and _wait_file(p, wait_ms):
+                return p
+        except Exception as e:
+            print(f"Avatar download error: {e}")
+        return None
+    except Exception as e:
+        print(f"Avatar processing error: {e}")
+        return None
+
+def _media_image_path(acc, msg):
+    try:
+        media = getattr(msg, "media", None)
+        if isinstance(media, TLRPC.TL_messageMediaPhoto) and media.photo:
+            sz = _best_photo_size(media.photo)
+            if sz:
+                fl = FileLoader.getInstance(acc)
+                f = fl.getPathToAttach(sz, True)
+                return f.getAbsolutePath() if f else None
+        fl = FileLoader.getInstance(acc)
+        f2 = fl.getPathToMessage(getattr(msg, "messageOwner", msg))
+        return f2.getAbsolutePath() if f2 else None
+    except Exception:
+        return None
+
+def _download_media(acc, msg, wait_ms=3000):
+    try:
+        p = _media_image_path(acc, msg)
+        if _path_exists(p):
+            return p
+
+        media = getattr(msg, "media", None)
+        if not media:
+            return None
+
+        fl = FileLoader.getInstance(acc)
+        if isinstance(media, TLRPC.TL_messageMediaPhoto) and media.photo:
+            sz = _best_photo_size(media.photo)
+            if sz:
+                try:
+                    fl.loadFile(sz, None, 0, 1)
+                    if p and _wait_file(p, wait_ms):
+                        return p
+                except Exception as e:
+                    print(f"Photo download error: {e}")
+        return None
+    except Exception as e:
+        print(f"Media processing error: {e}")
+        return None
+
+def _get_mc(account):
+    try:
+        from client_utils import get_messages_controller as gmc
+        try:
+            return gmc(account)
+        except TypeError:
+            return gmc()
+    except Exception:
+        return MessagesController.getInstance(account)
+
+def _safe_send_request(account, req, cb):
+    try:
+        send_request(account, req, RequestCallback(cb))
+    except (TypeError, AttributeError):
+        try:
+            send_request(req, RequestCallback(cb))
+        except Exception as e:
+            print(f"Request error: {e}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error(f"Request failed: {str(e)[:50]}"))
+
+def _downloads_dir():
+    base = "/storage/emulated/0/Download/Msg2HTML"
+    try:
+        log(f"[Msg2HTML] Checking downloads dir: {base}")
+        if not os.path.exists(base):
+            log(f"[Msg2HTML] Creating downloads dir: {base}")
+            os.makedirs(base, exist_ok=True)
+
+        if os.path.exists(base) and os.access(base, os.R_OK | os.W_OK):
+            log(f"[Msg2HTML] Downloads dir ready and accessible: {base}")
+            return base
+        else:
+            log(f"[Msg2HTML] Downloads dir not accessible: {base}")
+            raise Exception("Directory not accessible")
+
+    except Exception as e:
+        log(f"[Msg2HTML] Downloads dir error: {e}")
+        fallback = "/storage/emulated/0/Download"
+        try:
+            if os.path.exists(fallback) and os.access(fallback, os.R_OK | os.W_OK):
+                log(f"[Msg2HTML] Using accessible fallback dir: {fallback}")
+                return fallback
+            else:
+                log(f"[Msg2HTML] Fallback dir not accessible: {fallback}")
+        except Exception as e2:
+            log(f"[Msg2HTML] Fallback dir check failed: {e2}")
+
+        log(f"[Msg2HTML] Using final fallback: {fallback}")
+        return fallback
+
+def _debug_html_files():
+    log("[Msg2HTML] === DEBUG: HTML Files Check ===")
+    dirs_to_check = [
+        "/storage/emulated/0/Download/Msg2HTML",
+        "/storage/emulated/0/Download",
+        _downloads_dir()
+    ]
+
+    total_found = 0
+    for d in dirs_to_check:
+        try:
+            if os.path.exists(d):
+                files = os.listdir(d)
+                html_files = [f for f in files if f.lower().endswith('.html')]
+                log(f"[Msg2HTML] {d}: {len(html_files)} HTML files - {html_files}")
+                total_found += len(html_files)
+            else:
+                log(f"[Msg2HTML] {d}: Directory doesn't exist")
+        except Exception as e:
+            log(f"[Msg2HTML] {d}: Error - {e}")
+
+    log(f"[Msg2HTML] === Total HTML files found: {total_found} ===")
+    return total_found
+
+def _create_file_manager_intent(downloads_dir, file_name):
+    try:
+        from org.telegram.messenger import ApplicationLoader
+        from android.content.pm import PackageManager, ResolveInfo
+
+        context = ApplicationLoader.applicationContext
+        pm = context.getPackageManager()
+
+        intent = Intent(Intent.ACTION_VIEW)
+        intent.setDataAndType(Uri.fromFile(File(downloads_dir)), "resource/folder")
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        activities = pm.queryIntentActivities(intent, 0)
+
+        excluded_keywords = ["telegram", "whatsapp", "gmail", "email", "messenger", "sms", "mms"]
+        file_manager_keywords = ["file", "manager", "explorer", "documents", "storage"]
+
+        filtered_activities = []
+        for activity in activities:
+            package_name = activity.activityInfo.packageName.lower()
+            app_name = str(activity.loadLabel(pm)).lower()
+
+            is_excluded = any(keyword in package_name or keyword in app_name for keyword in excluded_keywords)
+
+            is_file_manager = any(keyword in package_name or keyword in app_name for keyword in file_manager_keywords)
+
+            if not is_excluded and (is_file_manager or package_name.startswith("com.android.documentsui")):
+                filtered_activities.append(activity)
+                log(f"[Msg2HTML] Found file manager: {app_name} ({package_name})")
+
+        if filtered_activities:
+            chooser = Intent.createChooser(intent, f"Open Downloads folder (find {file_name})")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            return chooser
+
+        return None
+
+    except Exception as e:
+        log(f"[Msg2HTML] Error creating file manager intent: {e}")
+        return None
+
+def _write_downloads(name, data):
+    try:
+        downloads_dir = _downloads_dir()
+        path = os.path.join(downloads_dir, name)
+        log(f"[Msg2HTML] Writing file: {path}")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+        log(f"[Msg2HTML] File written successfully: {path}")
+        return path
+    except Exception as e:
+        log(f"[Msg2HTML] File write error: {e}")
+        raise
+
+def _rescan_media(path):
+    try:
+        from android.media import MediaScannerConnection
+        from org.telegram.messenger import ApplicationLoader
+        MediaScannerConnection.scanFile(ApplicationLoader.applicationContext, [path], None, None)
+    except Exception:
+        pass
+
+def _find_latest_html_path():
+    try:
+        dirs_to_check = [
+            _downloads_dir(),  # /storage/emulated/0/Download/Msg2HTML
+            "/storage/emulated/0/Download",  # Fallback Downloads folder
+            "/storage/emulated/0/Download/Msg2HTML"  # Explicit path
+        ]
+
+        all_html_files = []
+
+        for d in dirs_to_check:
+            try:
+                if not os.path.exists(d):
+                    log(f"[Msg2HTML] Directory doesn't exist: {d}")
+                    continue
+
+                log(f"[Msg2HTML] Checking directory: {d}")
+                files = os.listdir(d)
+                html_files = [n for n in files if n.lower().endswith(".html") and "chat_export_" in n.lower()]
+
+                log(f"[Msg2HTML] Found {len(html_files)} HTML files in {d}: {html_files}")
+
+                for file in html_files:
+                    full_path = os.path.join(d, file)
+                    if os.path.exists(full_path):
+                        mtime = os.path.getmtime(full_path)
+                        all_html_files.append((full_path, mtime))
+
+            except Exception as e:
+                log(f"[Msg2HTML] Error checking directory {d}: {e}")
+                continue
+
+        if not all_html_files:
+            log(f"[Msg2HTML] No HTML files found in any directory")
+            return None
+
+        # Sort by modification time (newest first)
+        all_html_files.sort(key=lambda x: x[1], reverse=True)
+        latest_path = all_html_files[0][0]
+
+        log(f"[Msg2HTML] Latest HTML file: {latest_path}")
+        return latest_path
+
+    except Exception as e:
+        log(f"[Msg2HTML] Error in _find_latest_html_path: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+
+def _open_file_in_manager(file_path):
+    """Open HTML file with improved Android compatibility"""
+    def _ui():
+        try:
+            log(f"[Msg2HTML] Opening file in manager: {file_path}")
+
+            if not os.path.exists(file_path):
+                BulletinHelper.show_error(_t("file_not_found"))
+                return
+
+            from org.telegram.messenger import ApplicationLoader
+            from android.content.pm import PackageManager
+
+            context = ApplicationLoader.applicationContext
+            file_name = os.path.basename(file_path)
+
+            # Ensure file is in the most accessible location
+            downloads_dir = "/storage/emulated/0/Download"
+            accessible_path = os.path.join(downloads_dir, file_name)
+
+            try:
+                if not os.path.exists(accessible_path) or os.path.getmtime(file_path) > os.path.getmtime(accessible_path):
+                    import shutil
+                    shutil.copy2(file_path, accessible_path)
+                    _rescan_media(accessible_path)
+                    log(f"[Msg2HTML] File copied/updated to: {accessible_path}")
+            except Exception as copy_e:
+                log(f"[Msg2HTML] File copy failed: {copy_e}")
+                accessible_path = file_path
+
+            # Method 1: Direct HTML file opening (most reliable)
+            try:
+                log(f"[Msg2HTML] Trying direct HTML file open")
+
+                intent = Intent(Intent.ACTION_VIEW)
+                file_uri = Uri.fromFile(File(accessible_path))
+                intent.setDataAndType(file_uri, "text/html")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                # Get all apps that can handle HTML files
+                pm = context.getPackageManager()
+                activities = pm.queryIntentActivities(intent, 0)
+
+                if activities and len(activities) > 0:
+                    # Create chooser excluding communication apps
+                    filtered_intents = []
+                    excluded_packages = ["org.telegram", "com.whatsapp", "com.google.android.gm", "com.android.email"]
+
+                    for activity in activities:
+                        package_name = activity.activityInfo.packageName
+                        if not any(excluded in package_name for excluded in excluded_packages):
+                            target_intent = Intent(Intent.ACTION_VIEW)
+                            target_intent.setDataAndType(file_uri, "text/html")
+                            target_intent.setPackage(package_name)
+                            target_intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            target_intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            filtered_intents.append(target_intent)
+
+                            app_name = str(activity.loadLabel(pm))
+                            log(f"[Msg2HTML] Found HTML handler: {app_name} ({package_name})")
+
+                    if filtered_intents:
+                        chooser = Intent.createChooser(filtered_intents[0], f"Open {file_name} with")
+                        if len(filtered_intents) > 1:
+                            chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, filtered_intents[1:])
+                        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                        context.startActivity(chooser)
+                        log(f"[Msg2HTML] HTML file chooser opened with {len(filtered_intents)} options")
+                        BulletinHelper.show_info(f"📄 Choose app to open {file_name}\n\n💡 Select browser or file manager")
+                        return
+
+            except Exception as e1:
+                log(f"[Msg2HTML] Direct HTML file open failed: {e1}")
+
+            # Method 2: Try to open Downloads folder with file managers
+            try:
+                log(f"[Msg2HTML] Trying Downloads folder open")
+
+                intent = Intent(Intent.ACTION_VIEW)
+                intent.setDataAndType(Uri.fromFile(File(downloads_dir)), "resource/folder")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                pm = context.getPackageManager()
+                activities = pm.queryIntentActivities(intent, 0)
+
+                # Filter for file managers only
+                file_manager_activities = []
+                for activity in activities:
+                    package_name = activity.activityInfo.packageName.lower()
+                    app_name = str(activity.loadLabel(pm)).lower()
+
+                    # Look for file manager keywords and exclude communication apps
+                    is_file_manager = any(keyword in package_name or keyword in app_name
+                                        for keyword in ["file", "manager", "explorer", "documents", "storage"])
+                    is_excluded = any(keyword in package_name or keyword in app_name
+                                    for keyword in ["telegram", "whatsapp", "gmail", "email", "messenger"])
+
+                    if (is_file_manager or package_name.startswith("com.android.documentsui")) and not is_excluded:
+                        file_manager_activities.append(activity)
+                        log(f"[Msg2HTML] Found file manager for folder: {app_name} ({package_name})")
+
+                if file_manager_activities:
+                    chooser = Intent.createChooser(intent, f"Open Downloads (find {file_name})")
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(chooser)
+
+                    log(f"[Msg2HTML] File manager folder chooser opened")
+                    BulletinHelper.show_info(f"📁 File manager opened\n📄 Find: {file_name}\n📍 Location: Downloads folder")
+                    return
+
+            except Exception as e2:
+                log(f"[Msg2HTML] Downloads folder open failed: {e2}")
+
+            file_managers = [
+                ("com.google.android.apps.nbu.files", "Google Files", "android.intent.action.VIEW"),
+                ("com.sec.android.app.myfiles", "Samsung My Files", "com.sec.android.app.myfiles.PICK_DATA"),
+                ("com.mi.android.globalFileexplorer", "MIUI File Manager", "android.intent.action.VIEW"),
+                ("com.android.documentsui", "Android Files", "android.intent.action.OPEN_DOCUMENT")
+            ]
+
+            downloads_dir = "/storage/emulated/0/Download"
+
+            for package, name, action in file_managers:
+                try:
+                    log(f"[Msg2HTML] Trying {name} with action {action}")
+
+                    intent = Intent(action)
+                    intent.setPackage(package)
+
+                    if action == "android.intent.action.OPEN_DOCUMENT":
+                        intent.setType("*/*")
+                        intent.addCategory(Intent.CATEGORY_OPENABLE)
+                    else:
+                        intent.setDataAndType(Uri.fromFile(File(downloads_dir)), "resource/folder")
+
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                    pm = context.getPackageManager()
+                    if intent.resolveActivity(pm) is not None:
+                        context.startActivity(intent)
+                        log(f"[Msg2HTML] {name} opened successfully")
+                        BulletinHelper.show_info(f"📁 Opened {name}\n📄 Look for: {file_name} in Downloads")
+                        return
+
+                except Exception as e:
+                    log(f"[Msg2HTML] {name} failed: {e}")
+
+            try:
+                log(f"[Msg2HTML] Trying CATEGORY_APP_FILES intent")
+
+                intent = Intent(Intent.ACTION_VIEW)
+                downloads_dir = "/storage/emulated/0/Download"
+                intent.setDataAndType(Uri.fromFile(File(downloads_dir)), "resource/folder")
+                intent.addCategory("android.intent.category.APP_FILES")  # Target file managers
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                pm = context.getPackageManager()
+                activities = pm.queryIntentActivities(intent, 0)
+
+                # Filter out communication apps
+                file_manager_activities = []
+                excluded_packages = ["com.whatsapp", "org.telegram", "com.google.android.gm", "com.android.email"]
+
+                for activity in activities:
+                    package_name = activity.activityInfo.packageName
+                    if not any(excluded in package_name for excluded in excluded_packages):
+                        file_manager_activities.append(activity)
+
+                if file_manager_activities:
+                    chooser = Intent.createChooser(intent, "Open Downloads folder")
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(chooser)
+                    log(f"[Msg2HTML] File manager chooser opened")
+                    BulletinHelper.show_info(f"📁 Choose file manager\n📄 Look for: {file_name} in Downloads")
+                    return
+
+            except Exception as e3:
+                log(f"[Msg2HTML] CATEGORY_APP_FILES method failed: {e3}")
+
+            try:
+                log(f"[Msg2HTML] Trying ACTION_GET_CONTENT file picker")
+
+                intent = Intent(Intent.ACTION_GET_CONTENT)
+                intent.setType("*/*")
+                intent.addCategory(Intent.CATEGORY_OPENABLE)
+                intent.putExtra(Intent.EXTRA_LOCAL_ONLY, True)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                chooser = Intent.createChooser(intent, "Choose file manager")
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(chooser)
+
+                log(f"[Msg2HTML] File picker opened")
+                BulletinHelper.show_info(f"📎 File picker opened\n📁 Navigate to Downloads\n📄 Find: {file_name}")
+                return
+
+            except Exception as e3b:
+                log(f"[Msg2HTML] File picker method failed: {e3b}")
+
+            try:
+                log(f"[Msg2HTML] Trying direct HTML file view")
+
+                downloads_dir = "/storage/emulated/0/Download"
+                accessible_path = os.path.join(downloads_dir, file_name)
+
+                if not os.path.exists(accessible_path):
+                    import shutil
+                    shutil.copy2(file_path, accessible_path)
+                    _rescan_media(accessible_path)
+
+                intent = Intent(Intent.ACTION_VIEW)
+                file_uri = Uri.fromFile(File(accessible_path))
+                intent.setDataAndType(file_uri, "text/html")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                chooser = Intent.createChooser(intent, "Open HTML file with")
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(chooser)
+
+                log(f"[Msg2HTML] HTML file chooser opened")
+                BulletinHelper.show_info(f"📄 Choose app to open HTML file\n📅 File: {file_name}")
+                return
+
+            except Exception as e4:
+                log(f"[Msg2HTML] HTML file view failed: {e4}")
+
+            log(f"[Msg2HTML] All methods failed, copying to Downloads")
+            try:
+                downloads_dir = "/storage/emulated/0/Download"
+                dest_path = os.path.join(downloads_dir, file_name)
+
+                if not os.path.exists(dest_path):
+                    import shutil
+                    shutil.copy2(file_path, dest_path)
+                    _rescan_media(dest_path)
+
+                file_size = os.path.getsize(dest_path)
+                BulletinHelper.show_info(f"📁 File copied to Downloads\n📄 {file_name}\n📊 Size: {file_size} bytes\n\n💡 Open your file manager and look in Downloads folder")
+
+            except Exception as copy_error:
+                log(f"[Msg2HTML] Final copy failed: {copy_error}")
+                BulletinHelper.show_error("Could not open file manager")
+
+        except Exception as e:
+            log(f"[Msg2HTML] UI operation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            BulletinHelper.show_error("Failed to open file manager")
+
+    run_on_ui_thread(_ui)
+
+
+
+def _send_html_document(peer, file_path, caption=None):
+    try:
+        log(f"[Msg2HTML] Sending HTML document: {file_path}")
+
+        if not os.path.exists(file_path):
+            log(f"[Msg2HTML] File not found: {file_path}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error(_t("file_not_found")))
+            return
+
+        from client_utils import send_message
+        file_name = os.path.basename(file_path)
+
+        send_methods = [
+            ("document", file_path),
+            ("path", file_path)
+        ]
+
+        for method_name, method_value in send_methods:
+            try:
+                log(f"[Msg2HTML] Trying send_message with {method_name}")
+                send_message({
+                    "peer": peer,
+                    method_name: method_value,
+                    "caption": caption or f"HTML Export - {file_name}",
+                    "message": None
+                })
+                log(f"[Msg2HTML] Document sent successfully using {method_name}")
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_t("send_success")))
+                return
+            except Exception as e:
+                log(f"[Msg2HTML] {method_name} method failed: {e}")
+
+
+        try:
+            log(f"[Msg2HTML] Falling back to info message")
+            file_size = os.path.getsize(file_path)
+            message = f"📄 HTML Export ({file_name})\n\nFile saved to: {file_path}\n\nSize: {file_size} bytes"
+
+            send_message({
+                "peer": peer,
+                "message": message
+            })
+
+            log(f"[Msg2HTML] File info sent successfully")
+            run_on_ui_thread(lambda: BulletinHelper.show_info("HTML export info sent"))
+
+        except Exception as e:
+            log(f"[Msg2HTML] Fallback message failed: {e}")
+            run_on_ui_thread(lambda: BulletinHelper.show_info(f"HTML saved: {file_name}"))
+
+    except Exception as e:
+        log(f"[Msg2HTML] Send document error: {e}")
+        import traceback
+        traceback.print_exc()
+        run_on_ui_thread(lambda: BulletinHelper.show_error(f"Send error: {str(e)[:40]}"))
+
+class Msg2HtmlPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        log("[Msg2HTML] Plugin __init__ called")
+    def on_plugin_load(self):
+        log("[Msg2HTML] Plugin loading...")
+        try:
+            self.add_on_send_message_hook()
+            log("[Msg2HTML] Hook registered successfully")
+
+            # Add menu items
+            self._add_menu_items()
+            log("[Msg2HTML] Menu items added successfully")
+
+        except Exception as e:
+            log(f"[Msg2HTML] Plugin load failed: {e}")
+            traceback.print_exc()
+
+    def create_settings(self):
+        if not _SETTINGS_AVAILABLE:
+            return []
+        return [
+            Header(_t("settings_header")),
+            Switch(key="default_media", text=_t("settings_media"), default=True, icon="msg_photo"),
+            Switch(key="default_avatars", text=_t("settings_avatars"), default=True, icon="msg_profilephoto"),
+            Input(key="default_count", text=_t("settings_count"), default="100", icon="msg_list"),
+            Input(key="inline_kb", text=_t("settings_inline"), default="2400", icon="msg_photo_text_framed3"),
+            Text(text=_t("settings_help"), icon="msg_info")
+        ]
+
+    def _add_menu_items(self):
+        try:
+            self.add_menu_item(
+                MenuItemData(
+                    menu_type=MenuItemType.CHAT_ACTION_MENU,
+                    text=_t("menu_export"),
+                    on_click=self._handle_export_menu_click,
+                    icon="msg_download",
+                    item_id="msg2html_export",
+                    subtext=_t("menu_export_desc")
+                )
+            )
+
+            self.add_menu_item(
+                MenuItemData(
+                    menu_type=MenuItemType.CHAT_ACTION_MENU,
+                    text=_t("menu_view"),
+                    on_click=self._handle_view_html_menu_click,
+                    icon="msg_folder",
+                    item_id="msg2html_view",
+                    subtext=_t("menu_view_desc")
+                )
+            )
+
+
+            self.add_menu_item(
+                MenuItemData(
+                    menu_type=MenuItemType.DRAWER_MENU,
+                    text=_t("menu_view_drawer"),
+                    on_click=self._handle_view_html_drawer_click,
+                    icon="msg_folder",
+                    item_id="msg2html_drawer_view",
+                    subtext=_t("menu_view_drawer_desc")
+                )
+            )
+
+            log("[Msg2HTML] Menu items registered successfully")
+
+        except Exception as e:
+            log(f"[Msg2HTML] Menu item registration failed: {e}")
+            traceback.print_exc()
+
+    def _handle_export_menu_click(self, context):
+        try:
+            log("[Msg2HTML] Export menu item clicked")
+
+            want_media = bool(self.get_setting("default_media", True))
+            want_avatars = bool(self.get_setting("default_avatars", True))
+            try:
+                default_count = int(str(self.get_setting("default_count", "100")).strip() or "100")
+            except Exception:
+                default_count = 100
+            try:
+                inline_kb = int(str(self.get_setting("inline_kb", "2400")).strip() or "2400")
+            except Exception:
+                inline_kb = 2400
+
+            try:
+                from client_utils import get_last_fragment
+                frag = get_last_fragment()
+                if not frag:
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(_t("no_chat")))
+                    return
+
+                peer = frag.getDialogId()
+                from org.telegram.messenger import UserConfig
+                account = UserConfig.selectedAccount
+
+                log(f"[Msg2HTML] Starting menu export: count={default_count}, media={want_media}, avatars={want_avatars}")
+
+                run_on_queue(lambda: self._export(account, peer, None, default_count, want_media, want_avatars, inline_kb))
+
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_t("export_starting", default_count)))
+
+            except Exception as e:
+                log(f"[Msg2HTML] Export menu error: {e}")
+                run_on_ui_thread(lambda: BulletinHelper.show_error(_t("export_error", str(e)[:30])))
+
+        except Exception as e:
+            log(f"[Msg2HTML] Export menu click error: {e}")
+            traceback.print_exc()
+
+    def _handle_view_html_menu_click(self, context):
+        try:
+            log("[Msg2HTML] View HTML menu item clicked")
+
+            last_path = _find_latest_html_path()
+            log(f"[Msg2HTML] Found HTML path: {last_path}")
+
+            if not last_path or not os.path.exists(last_path):
+                log("[Msg2HTML] No HTML file found for chat menu")
+                run_on_ui_thread(lambda: BulletinHelper.show_error("No HTML exports found\n\nCreate an export first using .html command or export menu"))
+                return
+
+            log(f"[Msg2HTML] Opening HTML file: {last_path}")
+            _open_file_in_manager(last_path)
+
+        except Exception as e:
+            log(f"[Msg2HTML] View HTML menu click error: {e}")
+            import traceback
+            traceback.print_exc()
+            run_on_ui_thread(lambda: BulletinHelper.show_error(_t("view_error", str(e)[:30])))
+
+    def _handle_view_html_drawer_click(self, context):
+        try:
+            log("[Msg2HTML] View HTML drawer menu item clicked")
+
+            downloads_dirs = [
+                _downloads_dir(),
+                "/storage/emulated/0/Download",
+                "/storage/emulated/0/Download/Msg2HTML"
+            ]
+
+            log(f"[Msg2HTML] Checking for HTML files in directories: {downloads_dirs}")
+
+            last_path = _find_latest_html_path()
+            log(f"[Msg2HTML] _find_latest_html_path returned: {last_path}")
+
+            if not last_path:
+                log("[Msg2HTML] No HTML file path found")
+                try:
+                    msg = "📄 No HTML exports found\n\n💡 Tips:\n• Export a chat first using .html command\n• Check if files exist in Downloads/Msg2HTML/\n• Try the export menu in chat"
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(msg))
+                except Exception:
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(_t("no_exports")))
+                return
+
+            if not os.path.exists(last_path):
+                log(f"[Msg2HTML] HTML file doesn't exist at path: {last_path}")
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"File not found: {os.path.basename(last_path)}"))
+                return
+
+            try:
+                file_name = os.path.basename(last_path)
+                file_size = os.path.getsize(last_path)
+                file_time = os.path.getmtime(last_path)
+
+                import datetime
+                time_str = datetime.datetime.fromtimestamp(file_time).strftime("%Y-%m-%d %H:%M")
+
+                log(f"[Msg2HTML] Opening HTML file from drawer: {last_path} (Size: {file_size}, Time: {time_str})")
+
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_t("opening_file", file_name, time_str, file_size)))
+
+                _open_file_in_manager(last_path)
+
+            except Exception as info_error:
+                log(f"[Msg2HTML] Error getting file info: {info_error}")
+                _open_file_in_manager(last_path)
+
+        except Exception as e:
+            log(f"[Msg2HTML] View HTML drawer click error: {e}")
+            import traceback
+            traceback.print_exc()
+            run_on_ui_thread(lambda: BulletinHelper.show_error(_t("view_error", str(e)[:30])))
+
+    def on_send_message_hook(self, account, params) -> HookResult:
+        try:
+            log(f"[Msg2HTML] Hook called with account={account}, params={type(params)}")
+            if not hasattr(params, 'message'):
+                log(f"[Msg2HTML] No message attribute in params. Available attrs: {dir(params)}")
+                return HookResult()
+            if not isinstance(params.message, str):
+                log(f"[Msg2HTML] Message is not string: {type(params.message)}, value: {params.message}")
+                return HookResult()
+            text = params.message.strip()
+            low = text.lower()
+            log(f"[Msg2HTML] Processing message: '{text}'")
+        except Exception as e:
+            log(f"[Msg2HTML] Hook params error: {e}")
+            traceback.print_exc()
+            return HookResult()
+        if low == ".htmlsend" or low == ".sendhtml":
+            log(f"[Msg2HTML] Htmlsend command detected")
+            try:
+                last_path = _find_latest_html_path()
+                log(f"[Msg2HTML] Latest HTML path: {last_path}")
+                if not last_path or not os.path.exists(last_path):
+                    log(f"[Msg2HTML] No HTML file found")
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(_t("no_files")))
+                    return HookResult(strategy=HookStrategy.CANCEL)
+
+                log(f"[Msg2HTML] Sending HTML file info to chat")
+
+                try:
+                    from client_utils import send_message
+
+                    file_name = os.path.basename(last_path)
+                    file_size = os.path.getsize(last_path)
+
+                    with open(last_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        preview = f.read(300)
+
+                    message = _t("export_complete", file_name, file_size, last_path, preview[:200])
+
+                    peer = getattr(params, "peer", None)
+                    if peer:
+                        send_message({
+                            "peer": peer,
+                            "message": message
+                        })
+                        log(f"[Msg2HTML] File info sent to chat successfully")
+                        run_on_ui_thread(lambda: BulletinHelper.show_info("HTML export info sent to chat!"))
+                    else:
+                        log(f"[Msg2HTML] No peer available, showing notification only")
+                        run_on_ui_thread(lambda: BulletinHelper.show_info(f"HTML saved: {file_name}"))
+
+                except Exception as e:
+                    log(f"[Msg2HTML] Failed to send message: {e}")
+                    run_on_ui_thread(lambda: BulletinHelper.show_info(f"HTML saved: {os.path.basename(last_path)}"))
+
+            except Exception as e:
+                log(f"[Msg2HTML] Htmlsend error: {e}")
+                import traceback
+                traceback.print_exc()
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Send failed: {str(e)[:30]}"))
+            return HookResult(strategy=HookStrategy.CANCEL)
+        if low == ".htmltest":
+            log(f"[Msg2HTML] Test command detected")
+            run_on_ui_thread(lambda: BulletinHelper.show_info(_t("plugin_working")))
+            return HookResult(strategy=HookStrategy.CANCEL)
+
+        if low == ".htmldebug":
+            log(f"[Msg2HTML] Debug command detected")
+            try:
+                total_files = _debug_html_files()
+                latest = _find_latest_html_path()
+                msg = f"🔍 HTML Debug Info\n\n📁 Total files: {total_files}\n🕒 Latest: {os.path.basename(latest) if latest else 'None'}\n\n📝 Check logs for details"
+                run_on_ui_thread(lambda: BulletinHelper.show_info(msg))
+            except Exception as e:
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Debug failed: {str(e)[:30]}"))
+            return HookResult(strategy=HookStrategy.CANCEL)
+
+        if not low.startswith(".html"):
+            return HookResult()
+
+        log(f"[Msg2HTML] HTML export command detected: {text}")
+        try:
+            parts = text.split()
+            want_media = bool(self.get_setting("default_media", True))
+            want_avatars = bool(self.get_setting("default_avatars", True))
+            try:
+                default_count = int(str(self.get_setting("default_count", "100")).strip() or "100")
+            except Exception:
+                default_count = 100
+            try:
+                inline_kb = int(str(self.get_setting("inline_kb", "2400")).strip() or "2400")
+            except Exception:
+                inline_kb = 2400
+            count = default_count
+            for p in parts[1:]:
+                lp = p.lower()
+                if lp.isdigit():
+                    count = max(1, min(2000, int(lp)))
+                elif lp == "nomedia":
+                    want_media = False
+                elif lp == "noavatars":
+                    want_avatars = False
+            reply = getattr(params, "replyToMsg", None) or getattr(params, "reply_to_msg", None)
+            anchor_id = _m_id(reply) if reply is not None else None
+            peer = getattr(params, "peer", None)
+            if peer is None:
+                return HookResult(strategy=HookStrategy.CANCEL)
+            # Provide user feedback about export type
+            if anchor_id:
+                log(f"[Msg2HTML] Starting reply-based export: count={count}, media={want_media}, avatars={want_avatars}, from_message={anchor_id}")
+                media_text = "Yes" if want_media else "No"
+                if _get_user_language() == "ru":
+                    media_text = "Да" if want_media else "Нет"
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_t("reply_export_start", count, media_text)))
+            else:
+                log(f"[Msg2HTML] Starting regular export: count={count}, media={want_media}, avatars={want_avatars}")
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_t("export_starting", count)))
+
+            run_on_queue(lambda: self._export(account, peer, anchor_id, count, want_media, want_avatars, inline_kb))
+            return HookResult(strategy=HookStrategy.CANCEL)
+        except Exception as e:
+            log(f"[Msg2HTML] Hook processing error: {e}")
+            traceback.print_exc()
+            try:
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Plugin error: {str(e)[:30]}"))
+                return HookResult(strategy=HookStrategy.CANCEL)
+            except Exception:
+                return HookResult(strategy=HookStrategy.CANCEL)
+
+    def _export(self, account, peer, anchor_id, count, want_media, want_avatars, inline_kb):
+        try:
+            print(f"Starting export: count={count}, media={want_media}, avatars={want_avatars}")
+            mc = _get_mc(account)
+            try:
+                input_peer = mc.getInputPeer(peer)
+            except Exception as e:
+                print(f"getInputPeer error with mc: {e}")
+                try:
+                    input_peer = MessagesController.getInstance(account).getInputPeer(peer)
+                except Exception as e2:
+                    print(f"getInputPeer error with MessagesController: {e2}")
+                    input_peer = None
+            if input_peer is None:
+                run_on_ui_thread(lambda: BulletinHelper.show_error("Cannot get peer info"))
+                return
+        except Exception as e:
+            print(f"Export initialization error: {e}")
+            traceback.print_exc()
+            run_on_ui_thread(lambda: BulletinHelper.show_error(f"Init error: {str(e)[:30]}"))
+            return
+        users = {}
+        chats = {}
+        msgs = []
+        ids_seen = set()
+        fetched = 0
+        stop = False
+        offset_id = 0
+        min_id = 0
+
+        # If we have a reply, start export FROM that message (not after it)
+        if anchor_id is not None and anchor_id > 0:
+            try:
+                offset_id = int(anchor_id)  # Start from replied message
+                log(f"[Msg2HTML] {_t('reply_export_from', offset_id)}")
+            except Exception:
+                offset_id = 0
+
+        last_oldest = -1
+
+        def on_chunk(resp, err):
+            nonlocal offset_id, fetched, stop, last_oldest
+            try:
+                if err:
+                    print(f"Chunk error: {err}")
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(f"API error: {str(err)[:50]}"))
+                    stop = True
+                    return
+                if not resp:
+                    print("Empty response received")
+                    stop = True
+                    return
+                for u in _to_list(getattr(resp, "users", None)):
+                    try:
+                        users[u.id] = u
+                    except Exception:
+                        pass
+                for c in _to_list(getattr(resp, "chats", None)):
+                    try:
+                        chats[c.id] = c
+                    except Exception:
+                        pass
+                lst = _to_list(getattr(resp, "messages", None))
+                if not lst:
+                    stop = True
+                else:
+                    for m in lst:
+                        mid = _m_id(m)
+                        if min_id and mid <= min_id:
+                            continue
+                        if mid in ids_seen:
+                            continue
+                        ids_seen.add(mid)
+                        msgs.append(m)
+                        fetched += 1
+                        if count is not None and fetched >= count:
+                            stop = True
+                            break
+                    if lst:
+                        oldest = _m_id(lst[-1])
+                        if oldest <= 1:
+                            stop = True
+                        if last_oldest == oldest:
+                            stop = True
+                        last_oldest = oldest
+                        if not stop:
+                            offset_id = oldest
+                            rem = (count - fetched) if count is not None else 100
+                            if rem > 0:
+                                send_next(min(rem, 100))
+                            else:
+                                stop = True
+                                finalize()
+                        else:
+                            finalize()
+                    else:
+                        stop = True
+                        finalize()
+            except Exception as e:
+                print(f"Chunk processing error: {e}")
+                traceback.print_exc()
+                stop = True
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Processing error: {str(e)[:50]}"))
+
+        def send_next(limit):
+            nonlocal current_limit
+            try:
+                current_limit = max(1, min(100, int(limit)))
+                print(f"Requesting {current_limit} messages, offset_id={offset_id}, fetched={fetched}")
+                req = TLRPC.TL_messages_getHistory()
+                req.peer = input_peer
+                req.offset_id = offset_id
+                req.offset_date = 0
+                req.add_offset = 0
+                req.limit = current_limit
+                req.max_id = 0
+                req.min_id = min_id
+                req.hash = 0
+                _safe_send_request(account, req, on_chunk)
+            except Exception as e:
+                print(f"send_next error: {e}")
+                traceback.print_exc()
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Request error: {str(e)[:30]}"))
+
+        def sender_name(m):
+            sid = None
+            try:
+                if hasattr(m, "from_id") and (m.from_id is not None) and hasattr(m.from_id, "user_id"):
+                    sid = m.from_id.user_id
+                elif hasattr(m, "sender_id"):
+                    sid = m.sender_id
+            except Exception:
+                sid = None
+            if isinstance(sid, int):
+                if sid > 0 and (sid in users):
+                    u = users[sid]
+                    fn = getattr(u, "first_name", "") or ""
+                    ln = getattr(u, "last_name", "") or ""
+                    un = getattr(u, "username", "") or ""
+                    name = (fn + (" " + ln if ln else "")).strip()
+                    if name:
+                        return name, u
+                    if un:
+                        return "@" + un, u
+                    return "User" + str(sid), u
+                if sid < 0 and ((-sid) in chats):
+                    ch = chats[-sid]
+                    return getattr(ch, "title", "Chat"), None
+            return "User", None
+
+        def build_html():
+            acc = UserConfig.selectedAccount
+            data_cache = {}
+
+            sorted_msgs = sorted(msgs, key=_m_id)
+
+            css = """
+            body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,Arial,sans-serif;background:#0f1115;color:#e6e6e6;margin:20px;line-height:1.4;max-width:800px;margin:0 auto;padding:20px}
+            .header{text-align:center;margin-bottom:30px;padding:20px;border-bottom:2px solid #2a2f3a;background:#151922;border-radius:12px}
+            .msg{display:flex;gap:12px;align-items:flex-start;border:1px solid #2a2f3a;border-radius:12px;padding:12px;margin:10px 0;background:#151922;transition:all 0.2s ease}
+            .msg:hover{background:#1a1f2a;border-color:#3a3f4a}
+            .ava{width:40px;height:40px;border-radius:50%;background:linear-gradient(45deg,#333,#555);object-fit:cover;flex-shrink:0}
+            .col{flex:1;min-width:0}
+            .meta{opacity:0.7;font-size:11px;margin-bottom:8px;font-weight:500;color:#a0a0a0}
+            .text{word-wrap:break-word;margin-bottom:8px;line-height:1.5}
+            img.media{max-width:100%;max-height:400px;border-radius:8px;margin-top:8px;cursor:pointer;object-fit:contain}
+            .stats{text-align:center;margin-top:30px;padding:20px;border-top:2px solid #2a2f3a;opacity:0.6;font-size:12px;background:#151922;border-radius:12px}
+            @media (max-width: 600px) { .msg{flex-direction:column;gap:8px} .ava{align-self:flex-start} }
+            """
+
+            html_parts = [
+                f'<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat Export</title><style>{css}</style></head><body>',
+                f'<div class="header"><h2>💬 Chat Export</h2><p>{len(sorted_msgs)} messages • {time.strftime("%Y-%m-%d %H:%M")}</p></div>'
+            ]
+
+            for m in sorted_msgs:
+                name, u = sender_name(m)
+
+                md = _m_date(m)
+                dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(md)) if md else ""
+
+                av_src = ""
+                if u and want_avatars:
+                    user_id = getattr(u, 'id', 0)
+                    cache_key = f"avatar_{user_id}"
+
+                    if cache_key not in data_cache:
+                        p = _avatar_path(acc, u)
+                        if not _path_exists(p):
+                            p = _download_avatar(acc, u)
+
+                        if _path_exists(p):
+                            b64 = _file_b64(p, 180000)
+                            data_cache[cache_key] = f"data:image/jpeg;base64,{b64}" if b64 else None
+                        else:
+                            data_cache[cache_key] = None
+
+                    av_src = data_cache[cache_key] or ""
+
+                text = _m_text(m)
+                content_parts = []
+
+                if text:
+                    text_html = _esc(text).replace("\n", "<br>")
+                    content_parts.append(f"<div class='text'>{text_html}</div>")
+
+                if getattr(m, "media", None) and want_media:
+                    msg_id = _m_id(m)
+                    media_cache_key = f"media_{msg_id}"
+
+                    if media_cache_key not in data_cache:
+                        p = _media_image_path(acc, m)
+                        if not _path_exists(p):
+                            p = _download_media(acc, m)
+
+                        if _path_exists(p):
+                            b64 = _file_b64(p, int(inline_kb) * 1000)
+                            if b64:
+                                ext = p.lower().split('.')[-1] if '.' in p else 'jpeg'
+                                mime = 'image/jpeg' if ext in ['jpg', 'jpeg'] else f'image/{ext}'
+                                data_cache[media_cache_key] = f"data:{mime};base64,{b64}"
+                            else:
+                                data_cache[media_cache_key] = None
+                        else:
+                            data_cache[media_cache_key] = None
+
+                    if data_cache[media_cache_key]:
+                        content_parts.append(f'<img class="media" src="{data_cache[media_cache_key]}" loading="lazy" alt="Media"/>')
+
+
+                ava_html = f'<img class="ava" src="{av_src}" alt="{_esc(name)}" />' if av_src else '<div class="ava"></div>'
+                content_html = ''.join(content_parts) if content_parts else '<div class="text"><em>No content</em></div>'
+
+                html_parts.append(f'''
+                <div class='msg'>
+                    {ava_html}
+                    <div class='col'>
+                        <div class='meta'>{_esc(name)} • {_esc(dt)} • #{_m_id(m)}</div>
+                        {content_html}
+                    </div>
+                </div>''')
+
+            html_parts.extend([
+                f'<div class="stats">🤖 Generated by msg2html v2.4.0 • {len(data_cache)} files cached • 🕰️ {time.strftime("%H:%M:%S")}</div>',
+                '</body></html>'
+            ])
+
+            return ''.join(html_parts)
+
+        def finalize():
+            try:
+                log(f"[Msg2HTML] Finalizing export with {len(msgs)} messages")
+                if not msgs:
+                    run_on_ui_thread(lambda: BulletinHelper.show_error(_t("no_files")))
+                    return
+
+
+                start_time = time.time()
+                html_str = build_html()
+                gen_time = time.time() - start_time
+                log(f"[Msg2HTML] HTML generation took {gen_time:.2f}s")
+
+
+                timestamp = int(time.time() * 1000)
+                name = f"chat_export_{timestamp}.html"
+
+
+                raw_path = _write_downloads(name, html_str)
+                _rescan_media(raw_path)
+
+                file_size = len(html_str.encode('utf-8'))
+                log(f"[Msg2HTML] Export completed: {raw_path} ({file_size} bytes)")
+
+                run_on_ui_thread(lambda: BulletinHelper.show_info(_t("export_saved", len(msgs), os.path.basename(raw_path))))
+
+            except Exception as e:
+                log(f"[Msg2HTML] Finalization error: {e}")
+                import traceback
+                traceback.print_exc()
+                run_on_ui_thread(lambda: BulletinHelper.show_error(f"Save error: {str(e)[:30]}"))
+
+        current_limit = 100
+        send_next(current_limit)
+
+    def _send_html_file_simple(self, file_path):
+        def _ui():
+            try:
+                log(f"[Msg2HTML] Sending HTML file: {file_path}")
+
+                if not os.path.exists(file_path):
+                    BulletinHelper.show_error(_t("file_not_found"))
+                    return
+
+                frag = get_last_fragment()
+                if not frag:
+                    BulletinHelper.show_error(_t("no_chat"))
+                    return
+
+                dialog_id = frag.getDialogId()
+                account = UserConfig.selectedAccount
+                file_name = os.path.basename(file_path)
+
+                log(f"[Msg2HTML] Dialog: {dialog_id}, Account: {account}")
+
+
+                try:
+                    paths = ArrayList()
+                    paths.add(file_path)
+                    names = ArrayList()
+                    names.add(file_name)
+                    uris = ArrayList()
+                    uris.add(Uri.fromFile(File(file_path)))
+                    mimes = ArrayList()
+                    mimes.add("text/html")
+
+                    acc = AccountInstance.getInstance(account)
+                    SendMessagesHelper.prepareSendingDocuments(
+                        acc, paths, names, uris, "HTML Export", mimes,
+                        dialog_id, None, None, 0
+                    )
+
+                    log(f"[Msg2HTML] Document sending succeeded")
+                    BulletinHelper.show_info(_t("send_success"))
+                    return
+
+                except Exception as e:
+                    log(f"[Msg2HTML] Document sending failed: {e}")
+
+
+                try:
+                    downloads_dir = "/storage/emulated/0/Download"
+                    dest_path = os.path.join(downloads_dir, file_name)
+
+                    if not os.path.exists(dest_path):
+                        import shutil
+                        shutil.copy2(file_path, dest_path)
+                        _rescan_media(dest_path)
+
+                    BulletinHelper.show_info(_t("copy_to_downloads", file_name))
+                    log(f"[Msg2HTML] File copied to Downloads: {dest_path}")
+
+                except Exception as e2:
+                    log(f"[Msg2HTML] Copy fallback failed: {e2}")
+                    BulletinHelper.show_error("Failed to send or copy HTML file")
+
+            except Exception as e:
+                log(f"[Msg2HTML] Send file error: {e}")
+                import traceback
+                traceback.print_exc()
+                BulletinHelper.show_error(f"Send error: {str(e)[:40]}")
+
+        run_on_ui_thread(_ui)
+
+try:
+    log("[Msg2HTML] Reached end of plugin file, creating instance...")
+except:
+    print("[Msg2HTML] Reached end of plugin file, creating instance...")
+try:
+    plugin_instance = Msg2HtmlPlugin()
+    try:
+        log("[Msg2HTML] Plugin instance created successfully")
+        log("[Msg2HTML] Plugin file loaded completely")
+    except:
+        print("[Msg2HTML] Plugin instance created successfully")
+        print("[Msg2HTML] Plugin file loaded completely")
+except Exception as e:
+    log(f"[Msg2HTML] Plugin instance creation failed: {e}")
+    traceback.print_exc()

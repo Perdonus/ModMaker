@@ -1,0 +1,1597 @@
+"""
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⡿⠟⠋⠉⠉⠉⠉⠛⠿⣿⣿⣿⣿⡿⠛⠉⠉⠄⠈⠉⠙⠿⣿⣿⣿⣿
+⣿⣿⡿⠋⠄⣠⣶⣿⣿⣿⣷⣦⣄⠈⠛⢟⢁⣠⣤⣴⣶⣤⣄⠄⠄⠄⠈⢿⣿⣿
+⣿⡿⠁⢠⣾⣿⣿⣿⣿⣿⣿⣿⡿⣿⣦⣀⠈⠛⠛⠋⣸⣿⣿⣷⡄⠄⠄⠄⢻⣿
+⣿⠁⢀⣿⣿⣿⣿⣿⣿⣿⠋⠄⠄⣿⣿⣿⣿⣶⣶⣾⣿⣿⣿⣿⣧⠄⠄⠄⠄⣿
+⣿⠄⢸⣿⣿⣿⣿⣿⠟⠁⠄⠄⠄⠄⠙⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠄⠄⠄⠄⣿
+⣿⠄⠘⣿⣿⣿⣿⡏⠄⠄⠄⠄⠄⠄⠄⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⠄⠄⠄⠄⣿
+⣿⠄⠄⢻⣿⣿⣿⠁⠄⠄⠄⠄⠄⠄⠄⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⠄⠄⠄⢀⣿
+⣿⡆⠄⠈⠿⠿⠋⠄⠄⠄⠄⠄⠄⢰⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠄⠄⠄⣸⣿
+⣿⣿⡀⠄⠄⠄⠄⠄⠄⠄⠄⠄⠄⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠄⠄⣰⣿⣿
+⣿⣿⣷⡄⠄⠄⠄⠄⠄⠄⠄⠄⠄⠄⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠄⠄⣰⣿⣿⣿
+⣿⣿⣿⣿⣄⠄⠄⠄⠄⠄⠄⠄⠄⣰⣿⣿⣿⣿⣿⣿⣿⣿⠏⠄⢀⣴⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣷⣄⠄⠄⠄⠄⠄⣰⣿⣿⣿⣿⣿⣿⣿⡿⠃⠄⣠⣾⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣷⣄⠄⠄⠄⢿⣿⣿⣿⣿⣿⡿⠋⢀⣠⣾⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⣀⠄⠙⢿⣿⠟⠋⣠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⣄⣨⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+
+ Кража кода без указания авторства является публичным неуважением к работе автора.
+  Уважайте чужой труд: если используете этот код, пожалуйста, указывайте @mihailkotovski и источник (@mishabotov)
+
+ Оригинальная идея и реализация от @mihailkotovski & @mishabotov
+ Плавный курсор и плавное появление букв сверху от @shikaatux
+ Частицы + Rainbow Cursor + Glitch + NATIVE EMOJI SUPPORT (v3.1.0)
+ GPU Acceleration + Delete Animation (v3.3.0)
+ RESOURCE PROVIDER CACHING (v3.25.0)
+"""
+
+__id__ = "text_animation"
+__name__ = "Text Animation"
+__description__ = "Animation of text appearance/deletion. Optimized for performance using Batch Rendering."
+__author__ = "@mihailkotovski & @mishabotov & @shikaatux"
+__version__ = "3.25.0"
+__icon__ = "DateRegBot_by_MoiStikiBot/15"
+__min_version__ = "11.12.1"
+
+import time
+import math
+import random
+from weakref import WeakKeyDictionary
+from base_plugin import BasePlugin, MethodHook
+from android_utils import run_on_ui_thread
+from ui.settings import Header, Switch, Input, Divider, Text
+
+from java import jclass
+from java.lang import Class as JClass
+from java.lang import Character, String, CharSequence
+
+# --- SETTINGS CONSTANTS ---
+DEFAULT_PARTICLE_COUNT = "4"
+MASS_CHANGE_THRESHOLD = 20
+
+class Particle:
+    __slots__ = ('x', 'y', 'vx', 'vy', 'life', 'max_life', 'color')
+
+    def __init__(self, x, y, vx, vy, color, life):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.color = color
+        self.life = life
+        self.max_life = life
+
+    def reset(self, x, y, vx, vy, color, life):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.color = color
+        self.life = life
+        self.max_life = life
+
+class DeletedChar:
+    __slots__ = ('char', 'x', 'y', 'start_time')
+    def __init__(self, char, x, y, start_time):
+        self.char = char
+        self.x = x
+        self.y = y
+        self.start_time = start_time
+
+class AnimationState:
+    __slots__ = (
+        'prev_text_len', 'prev_len', 'last_text_content',
+        'char_start_times', 'deleted_chars', 'has_animating_chars', 'animation_running',
+        'cursor_x', 'cursor_y', 'cursor_animating',
+        'system_cursor_hidden', 'is_focused', 'heartbeat_running',
+        'cursor_paint', 'cursor_rect', 'drawing_depth',
+        'particles', 'last_rainbow_color',
+        'particle_paint', 'blur_paint', 'blur_rect', 'glitch_paint',
+        'particle_pool', 'hardware_layer_enabled',
+        'paint_cap_round', 'density',
+        'layout_listener', 'cached_cursor_color', 'is_color_cached'
+    )
+
+    def __init__(self):
+        self.prev_text_len = 0
+        self.prev_len = 0
+        self.last_text_content = ""
+        self.char_start_times = {}
+        self.deleted_chars = []
+        self.has_animating_chars = False
+        self.animation_running = False
+        self.cursor_x = -1.0
+        self.cursor_y = -1.0
+        self.cursor_animating = False
+        self.system_cursor_hidden = False
+        self.is_focused = False
+        self.heartbeat_running = False
+        self.drawing_depth = 0
+        self.cursor_paint = None
+        self.cursor_rect = None
+        self.particles = []
+        self.particle_pool = []
+        self.last_rainbow_color = 0xFF2CA5E0
+        self.particle_paint = None
+        self.blur_paint = None
+        self.blur_rect = None
+        self.glitch_paint = None
+        self.hardware_layer_enabled = False
+        self.paint_cap_round = None
+        self.density = 2.0
+        self.layout_listener = None
+        self.cached_cursor_color = 0xFF2CA5E0
+        self.is_color_cached = False
+
+
+class BaseTextHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+
+class TouchHook(BaseTextHook):
+    def after_hooked_method(self, param):
+        try:
+            view = param.thisObject
+            if view and view.isFocused():
+                if hasattr(self.plugin, "_start_heartbeat"):
+                    self.plugin._start_heartbeat(view)
+        except:
+            pass
+
+class SelectionHook(BaseTextHook):
+    def after_hooked_method(self, param):
+        try:
+            view = param.thisObject
+            if view and view.isFocused():
+                if hasattr(self.plugin, "_start_heartbeat"):
+                     self.plugin._start_heartbeat(view)
+        except:
+            pass
+
+class FocusHook(BaseTextHook):
+    def after_hooked_method(self, param):
+        try:
+            view = param.thisObject
+            focused = param.args[0]
+            if view and hasattr(self.plugin, "get_state"):
+                state = self.plugin.get_state(view)
+                state.is_focused = focused
+
+                if not focused:
+                    state.system_cursor_hidden = False
+                    # Invalidate color cache on blur so we check again next time (theme might change)
+                    state.is_color_cached = False
+                    self.plugin._disable_hardware_acceleration(view, state)
+                    try:
+                        if self.plugin.field_cursorWidth:
+                             pass
+                    except:
+                        pass
+                else:
+                    self.plugin._enable_hardware_acceleration(view, state)
+                    self.plugin._ensure_layout_listener(view, state)
+
+                    # SINGLE REFLECTION CALL HERE: Update color cache
+                    self.plugin._update_cursor_color_cache(view, state)
+
+                    self.plugin._start_heartbeat(view)
+
+                    def retry_wake():
+                        if view and view.isFocused():
+                            self.plugin._start_heartbeat(view)
+
+                    run_on_ui_thread(retry_wake, delay=50)
+                    run_on_ui_thread(retry_wake, delay=150)
+                    run_on_ui_thread(retry_wake, delay=300)
+
+        except Exception as e:
+            self.plugin.log(f"[ERROR] FocusHook: {e}")
+
+
+class TextBlurHook(BaseTextHook):
+
+    def __init__(self, plugin):
+        super().__init__(plugin)
+        self._classes_loaded = False
+        self._Paint = None
+        self._Bitmap = None
+        self._Canvas = None
+        self._Utilities = None
+        self._ForegroundColorSpan = None
+        self._RectF = None
+        self._Color = None
+        self._BitmapConfig = None
+        self._PaintCap = None
+        self._AndroidUtilities = None
+        self._active_spans = WeakKeyDictionary()
+
+    def _load_classes(self):
+        if self._classes_loaded:
+            return True
+        try:
+            self._Paint = jclass("android.graphics.Paint")
+            self._Bitmap = jclass("android.graphics.Bitmap")
+            self._Canvas = jclass("android.graphics.Canvas")
+            self._ForegroundColorSpan = jclass("android.text.style.ForegroundColorSpan")
+            self._RectF = jclass("android.graphics.RectF")
+            self._Color = jclass("android.graphics.Color")
+            self._BitmapConfig = jclass("android.graphics.Bitmap$Config").ARGB_8888
+            self._PaintCap = jclass("android.graphics.Paint$Cap")
+            self._AndroidUtilities = jclass("org.telegram.messenger.AndroidUtilities")
+            try:
+                self._Utilities = jclass("org.telegram.messenger.Utilities")
+            except:
+                self._Utilities = None
+            self._classes_loaded = True
+            return True
+        except Exception as e:
+            self.plugin.log(f"[ERROR] Failed to load classes: {e}")
+            return False
+
+    def _setup_cursor(self, view, state):
+        if not state.is_focused:
+            return
+
+        if state.system_cursor_hidden:
+            return
+        try:
+            view.setCursorVisible(True)
+            if self.plugin.field_cursorWidth:
+                self.plugin.field_cursorWidth.setFloat(view, 0.0)
+                state.system_cursor_hidden = True
+        except:
+            pass
+
+    def _update_hidden_span(self, view, state):
+        if self._ForegroundColorSpan is None:
+            return
+        try:
+            text = view.getText()
+            if text is None:
+                return
+
+            anim_indices = list(state.char_start_times.keys())
+
+            if not anim_indices:
+                self._remove_span(view)
+                return
+
+            start = min(anim_indices)
+            end = max(anim_indices) + 1
+
+            if start < 0: start = 0
+            if end > text.length(): end = text.length()
+            if start >= end: return
+
+            if view in self._active_spans:
+                try:
+                    text.removeSpan(self._active_spans.pop(view))
+                except:
+                    pass
+
+            new_span = self._ForegroundColorSpan(0x00000000)
+            text.setSpan(new_span, start, end, 33)
+            self._active_spans[view] = new_span
+        except Exception as e:
+            self.plugin.log(f"[ERROR] Update span failed: {e}")
+
+    def _remove_span(self, view):
+        if view in self._active_spans:
+            try:
+                view.getText().removeSpan(self._active_spans.pop(view))
+            except:
+                pass
+
+    def _start_text_animation_loop(self, view, state):
+        if state.animation_running:
+            return
+        state.animation_running = True
+
+        duration = int(self.plugin.get_setting("duration", 300))
+        delete_duration = int(self.plugin.get_setting("delete_duration", 200))
+
+        def update():
+            try:
+                # Particles Update
+                if state.particles:
+                    alive_count = 0
+                    particles = state.particles
+                    pool = state.particle_pool
+
+                    for i in range(len(particles)):
+                        p = particles[i]
+                        p.x += p.vx
+                        p.y += p.vy
+                        p.life -= 16
+                        if p.life > 0:
+                            particles[alive_count] = p
+                            alive_count += 1
+                        else:
+                            pool.append(p)
+                    del particles[alive_count:]
+
+                curr = time.time()
+
+                # Entry Animation
+                if state.char_start_times:
+                    to_remove = []
+                    for i, t in state.char_start_times.items():
+                        if (curr - t) * 1000 >= duration:
+                            to_remove.append(i)
+                    for i in to_remove:
+                        del state.char_start_times[i]
+                    try:
+                        if to_remove:
+                            self._update_hidden_span(view, state)
+                    except:
+                        pass
+
+                # Delete Animation cleanup
+                if state.deleted_chars:
+                    alive_chars = []
+                    for dc in state.deleted_chars:
+                        if (curr - dc.start_time) * 1000 < delete_duration:
+                            alive_chars.append(dc)
+                    state.deleted_chars = alive_chars
+
+                if not state.char_start_times and not state.deleted_chars and not state.particles:
+                    state.animation_running = False
+                    state.has_animating_chars = False
+                    self._remove_span(view)
+                    return
+
+                view.invalidate()
+                run_on_ui_thread(update, delay=16)
+            except Exception as e:
+                state.animation_running = False
+
+        run_on_ui_thread(update)
+
+    def _get_current_rainbow_color(self):
+        try:
+            if not self._Color: return 0xFF2CA5E0
+
+            rainbow_speed = float(self.plugin.get_setting("cursor_rainbow_speed", 25)) / 10.0
+            hue = (time.time() * 50.0 * rainbow_speed) % 360
+
+            h = hue / 60
+            x = 1 - abs(h % 2 - 1)
+            if h < 1: r, g, b = 1, x, 0
+            elif h < 2: r, g, b = x, 1, 0
+            elif h < 3: r, g, b = 0, 1, x
+            elif h < 4: r, g, b = 0, x, 1
+            elif h < 5: r, g, b = x, 0, 1
+            else: r, g, b = 1, 0, x
+
+            return 0xFF000000 | (int(r * 255) << 16) | (int(g * 255) << 8) | int(b * 255)
+        except:
+            return 0xFF2CA5E0
+
+    def _get_vertical_offset(self, view, layout):
+        """Calculates exact vertical offset for text based on View baseline/gravity."""
+        try:
+            if not layout:
+                return view.getPaddingTop()
+
+            view_baseline = view.getBaseline()
+            if view_baseline > 0:
+                layout_base_0 = layout.getLineBaseline(0)
+                return view_baseline - layout_base_0
+            else:
+                return view.getPaddingTop()
+        except:
+            return view.getPaddingTop()
+
+    def _spawn_particles_generic(self, view, state, x_coords, y_coords, paint, is_delete=False, override_count=None):
+        key_enabled = "delete_particles_enabled" if is_delete else "particles_enabled"
+        if not self.plugin.get_setting(key_enabled, is_delete):
+            return
+
+        if override_count:
+            count = override_count
+        else:
+            key_count = "delete_particle_count" if is_delete else "particle_count"
+            count = int(self.plugin.get_setting(key_count, DEFAULT_PARTICLE_COUNT))
+            if count > 8: count = 8
+
+        key_speed = "delete_particle_speed" if is_delete else "particle_speed"
+        speed_mult = float(self.plugin.get_setting(key_speed, 30 if is_delete else 25)) / 10.0
+
+        is_rainbow = self.plugin.get_setting("cursor_rainbow", False)
+
+        try:
+            if is_rainbow:
+                base_color = self._get_current_rainbow_color()
+            else:
+                base_color = paint.getColor()
+        except:
+            base_color = 0xFF888888
+
+        text_size = paint.getTextSize()
+        PI2 = 2 * math.pi
+
+        spawned = 0
+        for i in range(len(x_coords)):
+            center_x = x_coords[i]
+            center_y = y_coords[i] - (text_size / 3.0)
+
+            if center_x == 0 and center_y == 0:
+                continue
+
+            for _ in range(count):
+                angle = random.random() * PI2
+                speed = (0.5 + random.random() * 1.5) * speed_mult
+                if is_delete: speed *= 1.5
+
+                vx = math.cos(angle) * speed
+                vy = math.sin(angle) * speed
+
+                if not is_delete:
+                    vy -= (speed * 0.5)
+
+                life = random.randint(300, 600)
+
+                if state.particle_pool:
+                    p = state.particle_pool.pop()
+                    p.reset(center_x, center_y, vx, vy, base_color, life)
+                    state.particles.append(p)
+                else:
+                    state.particles.append(Particle(center_x, center_y, vx, vy, base_color, life))
+                spawned += 1
+
+    def before_hooked_method(self, param):
+        try:
+            if not self.plugin.get_setting("enabled", True):
+                return
+            view = param.thisObject
+            if not view or not self._load_classes():
+                return
+
+            state = self.plugin.get_state(view)
+            is_view_focused = view.isFocused()
+            state.is_focused = is_view_focused
+
+            # Ensure heart is beating on text change
+            if is_view_focused:
+                 self.plugin._start_heartbeat(view)
+                 # Lazy init color if needed
+                 if not state.is_color_cached:
+                     self.plugin._update_cursor_color_cache(view, state)
+
+            # SAFETY VALVE
+            if state.drawing_depth > 5:
+                state.drawing_depth = 0
+
+            if state.density == 2.0 and self._AndroidUtilities:
+                state.density = float(self._AndroidUtilities.density)
+
+            state.drawing_depth += 1
+
+            if is_view_focused and self.plugin.get_setting("cursor_enabled", True):
+                self._setup_cursor(view, state)
+
+            text_seq = view.getText()
+            if text_seq is None: return
+
+            current_text_str = str(text_seq)
+
+            # Init state
+            if state.last_text_content == "" and len(current_text_str) > 0 and not state.animation_running:
+                state.last_text_content = current_text_str
+                state.prev_len = len(current_text_str)
+                return
+
+            cur_len = len(current_text_str)
+            prev_len = len(state.last_text_content)
+
+            # --- INSERTION ---
+            if cur_len > prev_len:
+                diff = cur_len - prev_len
+
+                sel_end = view.getSelectionStart()
+                if sel_end < 0: sel_end = cur_len
+
+                insertion_index = max(0, sel_end - diff)
+
+                if state.char_start_times:
+                    new_start_times = {}
+                    for i, t in state.char_start_times.items():
+                        if i >= insertion_index:
+                            new_start_times[i + diff] = t
+                        else:
+                            new_start_times[i] = t
+                    state.char_start_times = new_start_times
+
+                now = time.time()
+                new_indices = []
+                for i in range(insertion_index, insertion_index + diff):
+                    state.char_start_times[i] = now
+                    new_indices.append(i)
+
+                if state.char_start_times:
+                    state.has_animating_chars = True
+                    self._update_hidden_span(view, state)
+
+                    if is_view_focused and self.plugin.get_setting("particles_enabled", False):
+                        layout = view.getLayout()
+                        paint = view.getPaint()
+                        pad_L, pad_T = view.getPaddingLeft(), view.getPaddingTop()
+
+                        if diff > MASS_CHANGE_THRESHOLD:
+                             pass
+                        else:
+                            xs, ys = [], []
+                            for idx in new_indices:
+                                cx, cy = self._get_char_pos(view, layout, paint, text_seq, idx, pad_L, pad_T, 0, 0)
+                                if cy != 0:
+                                    cx += (paint.measureText(str(text_seq.charAt(idx))) / 2.0)
+                                    xs.append(cx)
+                                    ys.append(cy)
+
+                            self._spawn_particles_generic(view, state, xs, ys, paint, is_delete=False)
+
+                    self._start_text_animation_loop(view, state)
+
+            # --- DELETION ---
+            elif cur_len < prev_len and self.plugin.get_setting("delete_animation_enabled", True):
+                diff = prev_len - cur_len
+
+                diff_idx = 0
+                limit = min(cur_len, prev_len)
+                while diff_idx < limit:
+                    if state.last_text_content[diff_idx] != current_text_str[diff_idx]:
+                        break
+                    diff_idx += 1
+
+                deleted_count = prev_len - cur_len
+                deleted_substring = state.last_text_content[diff_idx : diff_idx + deleted_count]
+
+                if deleted_substring:
+                    now = time.time()
+                    layout = view.getLayout()
+                    paint = view.getPaint()
+                    pad_L, pad_T = view.getPaddingLeft(), view.getPaddingTop()
+
+                    if deleted_count >= MASS_CHANGE_THRESHOLD:
+                        self._start_text_animation_loop(view, state)
+                    else:
+                        particle_xs, particle_ys = [], []
+
+                        for i, char in enumerate(deleted_substring):
+                            target_idx = diff_idx
+                            if target_idx < 0: target_idx = 0
+
+                            base_x, base_y = self._get_char_pos(view, layout, paint, text_seq, target_idx, pad_L, pad_T, 0, 0)
+
+                            width_offset = 0
+                            if i > 0:
+                                prev_chars = deleted_substring[:i]
+                                width_offset = paint.measureText(prev_chars)
+
+                            # EMOJI CHECK
+                            is_emoji = False
+                            if len(char) == 1:
+                                code = ord(char)
+                                c_type = Character.getType(code)
+                                if c_type == Character.OTHER_SYMBOL:
+                                    is_emoji = True
+                                if 0xD800 <= code <= 0xDFFF: # Surrogates
+                                    is_emoji = True
+                                if code > 0xFFFF:
+                                    is_emoji = True
+                            else:
+                                is_emoji = True
+
+                            if not is_emoji:
+                                state.deleted_chars.append(DeletedChar(
+                                    char,
+                                    base_x + width_offset,
+                                    base_y,
+                                    now
+                                ))
+
+                            if base_y != 0:
+                                particle_xs.append(base_x + width_offset + paint.measureText(char)/2)
+                                particle_ys.append(base_y)
+
+                        if is_view_focused:
+                             self._spawn_particles_generic(view, state, particle_xs, particle_ys, paint, is_delete=True)
+
+                        self._start_text_animation_loop(view, state)
+
+                rem = [i for i in state.char_start_times if i >= cur_len]
+                for i in rem:
+                    del state.char_start_times[i]
+
+                if not state.char_start_times and not state.deleted_chars:
+                    state.has_animating_chars = False
+                    self._remove_span(view)
+                else:
+                    self._update_hidden_span(view, state)
+
+            state.last_text_content = current_text_str
+            state.prev_len = cur_len
+        except Exception as e:
+            self.plugin.log(f"[ERROR] before_hooked_method: {e}")
+
+    def after_hooked_method(self, param):
+        try:
+            if not self.plugin.get_setting("enabled", True):
+                return
+            view = param.thisObject
+            canvas = param.args[0] if param.args else None
+            state = self.plugin.get_state(view)
+
+            # --- AUTO-KICKSTART FIX ---
+            if state.is_focused and not state.heartbeat_running:
+                 self.plugin._start_heartbeat(view)
+
+            # DECREMENT DEPTH
+            state.drawing_depth -= 1
+            if state.drawing_depth < 0: state.drawing_depth = 0
+
+            # RECURSION GUARD
+            if state.drawing_depth > 0:
+                return
+            if not view or not canvas:
+                return
+
+            if state.has_animating_chars:
+                self._draw_animated_chars(view, canvas, state)
+
+            if state.deleted_chars:
+                self._draw_delete_animation(view, canvas, state)
+
+            if state.particles:
+                self._draw_particles_batched(view, canvas, state)
+
+            if state.is_focused and self.plugin.get_setting("cursor_enabled", True):
+                self._draw_cursor(view, canvas, state)
+        except Exception as e:
+            self.plugin.log(f"[ERROR] Draw loop failed: {e}")
+            view = param.thisObject
+            if view:
+                 state = self.plugin.get_state(view)
+                 state.drawing_depth = 0
+
+    def _draw_particles_batched(self, view, canvas, state):
+        if not state.particles or not self._Paint: return
+
+        try:
+            if state.particle_paint is None:
+                state.particle_paint = self._Paint(1)
+                state.particle_paint.setAntiAlias(True)
+                if self._PaintCap is None:
+                    self._PaintCap = jclass("android.graphics.Paint$Cap")
+                state.particle_paint.setStrokeCap(self._PaintCap.ROUND)
+
+            state.particle_paint.setStrokeWidth(float(3.5 * state.density))
+
+            paint = state.particle_paint
+
+            b1, b2, b3 = [], [], []
+            c1, c2, c3 = None, None, None
+
+            for p in state.particles:
+                alpha = int((p.life / p.max_life) * 255)
+                if alpha <= 10: continue
+
+                if alpha > 170:
+                    if c1 is None: c1 = p.color
+                    b1.extend([p.x, p.y])
+                elif alpha > 85:
+                    if c2 is None: c2 = p.color
+                    b2.extend([p.x, p.y])
+                else:
+                    if c3 is None: c3 = p.color
+                    b3.extend([p.x, p.y])
+
+            if b1:
+                self._safe_draw_points(canvas, b1, paint, c1, 255)
+            if b2:
+                self._safe_draw_points(canvas, b2, paint, c2, 160)
+            if b3:
+                self._safe_draw_points(canvas, b3, paint, c3, 80)
+
+        except Exception as e:
+            self.plugin.log(f"[ERROR] Particle draw: {e}")
+
+    def _safe_draw_points(self, canvas, pts, paint, color_int, alpha_int):
+        try:
+            r = (color_int >> 16) & 0xFF
+            g = (color_int >> 8) & 0xFF
+            b = color_int & 0xFF
+            paint.setARGB(alpha_int, r, g, b)
+            canvas.drawPoints(pts, paint)
+        except:
+            pass
+
+    def _draw_delete_animation(self, view, canvas, state):
+        if not self._Paint: return
+
+        try:
+            delete_duration = int(self.plugin.get_setting("delete_duration", 200))
+
+            blur_enabled = self.plugin.get_setting("blur_enabled", True)
+            glitch_enabled = self.plugin.get_setting("glitch_enabled", False)
+            slide_enabled = self.plugin.get_setting("slide_enabled", True)
+
+            blur_rad = int(self.plugin.get_setting("blur_radius", 10))
+            try:
+                slide_dist = int(self.plugin.get_setting("slide_dist", 20))
+            except:
+                slide_dist = 20
+
+            now = time.time()
+            paint = view.getPaint()
+            if not paint: return
+
+            if state.glitch_paint is None:
+                state.glitch_paint = self._Paint(1)
+                state.glitch_paint.setAntiAlias(True)
+            if state.blur_paint is None:
+                state.blur_paint = self._Paint(1)
+                state.blur_paint.setAntiAlias(True)
+
+            orig_A = paint.getAlpha()
+
+            for dc in state.deleted_chars:
+                prog = min(1.0, (now - dc.start_time) * 1000 / delete_duration)
+                if prog >= 1.0: continue
+
+                y_off = 0
+                if slide_enabled:
+                    y_off = int(-slide_dist * prog)
+
+                char_to_draw = dc.char
+
+                if glitch_enabled:
+                    self._draw_char_with_glitch(canvas, state, char_to_draw, dc.x, dc.y + y_off, paint, 1.0 - prog, orig_A)
+                elif blur_enabled:
+                    self._draw_char_with_blur(canvas, state, char_to_draw, dc.x, dc.y + y_off, paint, 1.0 - prog, blur_rad, orig_A)
+                else:
+                    alpha = int((1.0 - prog) * orig_A)
+                    if alpha > 0:
+                        paint.setAlpha(alpha)
+                        canvas.drawText(char_to_draw, dc.x, dc.y + y_off, paint)
+
+            paint.setAlpha(orig_A)
+        except Exception as e:
+            self.plugin.log(f"[ERROR] Delete draw: {e}")
+
+    def _draw_cursor(self, view, canvas, state):
+        if not state.is_focused:
+            return
+
+        try:
+            canvas.save()
+
+            is_rainbow = self.plugin.get_setting("cursor_rainbow", False)
+            final_color = 0xFF2CA5E0
+
+            if is_rainbow:
+                final_color = self._get_current_rainbow_color()
+                state.last_rainbow_color = final_color
+            else:
+                # OPTIMIZATION: Use cached color! No reflection in loop.
+                if not state.is_color_cached:
+                    self.plugin._update_cursor_color_cache(view, state)
+                final_color = state.cached_cursor_color
+
+            layout = view.getLayout()
+            sel = view.getSelectionStart()
+            if sel < 0:
+                sel = 0
+
+            paint = view.getPaint()
+            text_size = paint.getTextSize()
+            target_x = 0.0
+
+            line_mid_y = 0.0
+
+            if layout:
+                try:
+                    target_line = layout.getLineForOffset(sel)
+                    target_x = layout.getPrimaryHorizontal(sel)
+                    line_T = layout.getLineTop(target_line)
+                    line_B = layout.getLineBottom(target_line)
+                    line_mid_y = line_T + (line_B - line_T) / 2.0
+                except:
+                    pass
+            else:
+                try:
+                    text_seq = view.getText()
+                    target_x = paint.measureText(text_seq, 0, sel) + view.getPaddingLeft()
+                    line_mid_y = text_size / 2.0
+                except:
+                    pass
+
+            if state.cursor_x < 0:
+                state.cursor_x = target_x
+            if state.cursor_y < 0:
+                state.cursor_y = line_mid_y
+
+            base_speed = max(0.05, float(self.plugin.get_setting("cursor_speed", 25)) / 100.0)
+            max_step = 60.0
+            is_moving = False
+
+            diff_x = target_x - state.cursor_x
+            if abs(diff_x) > 0.1:
+                step_x = diff_x * base_speed
+                if step_x > max_step:
+                    step_x = max_step
+                elif step_x < -max_step:
+                    step_x = -max_step
+                state.cursor_x += step_x
+                is_moving = True
+            else:
+                state.cursor_x = target_x
+
+            diff_y = line_mid_y - state.cursor_y
+            if abs(diff_y) > 0.1:
+                step_y = diff_y * (base_speed * 1.2)
+                limit_y = max_step * 1.5
+                if step_y > limit_y:
+                    step_y = limit_y
+                elif step_y < -limit_y:
+                    step_y = -limit_y
+                state.cursor_y += step_y
+                is_moving = True
+            else:
+                state.cursor_y = line_mid_y
+
+            blink_alpha = 255
+            if not is_moving:
+                t = time.time()
+                val = (math.sin(t * 6.0) + 1) / 2.0
+                blink_alpha = int((0.2 + 0.8 * val) * 255)
+
+            color_alpha = (final_color >> 24) & 0xFF
+
+            if is_rainbow:
+                color_alpha = 255
+
+            final_alpha = min(blink_alpha, color_alpha)
+            if final_alpha == 0 and blink_alpha > 0:
+                final_alpha = blink_alpha
+
+            pad_L = view.getPaddingLeft()
+
+            y_offset = self._get_vertical_offset(view, layout)
+
+            draw_y_center = y_offset + state.cursor_y
+            cursor_height = text_size * 1.25
+            width = int(self.plugin.get_setting("cursor_width", 5))
+
+            draw_y_T = draw_y_center - (cursor_height / 2)
+            draw_y_B = draw_y_center + (cursor_height / 2)
+            draw_x = pad_L + state.cursor_x
+
+            if state.cursor_paint is None:
+                state.cursor_paint = self._Paint(1)
+                state.cursor_paint.setAntiAlias(True)
+
+            r = (final_color >> 16) & 0xFF
+            g = (final_color >> 8) & 0xFF
+            b = final_color & 0xFF
+            state.cursor_paint.setARGB(final_alpha, r, g, b)
+
+            if state.cursor_rect is None:
+                state.cursor_rect = self._RectF()
+
+            state.cursor_rect.set(float(draw_x), float(draw_y_T), float(draw_x + width), float(draw_y_B))
+            canvas.drawRoundRect(state.cursor_rect, float(width / 2), float(width / 2), state.cursor_paint)
+
+            canvas.restore()
+        except Exception as e:
+             self.plugin.log(f"[ERROR] Cursor draw: {e}")
+
+    def _draw_animated_chars(self, view, canvas, state):
+        if not self._classes_loaded:
+            return
+        try:
+            paint = view.getPaint()
+            text_seq = view.getText()
+            if not paint or not text_seq:
+                return
+
+            if not state.char_start_times:
+                return
+
+            blur_enabled = self.plugin.get_setting("blur_enabled", True)
+            glitch_enabled = self.plugin.get_setting("glitch_enabled", False)
+            slide_enabled = self.plugin.get_setting("slide_enabled", True)
+
+            blur_rad = int(self.plugin.get_setting("blur_radius", 10))
+            duration = int(self.plugin.get_setting("duration", 300))
+
+            try:
+                slide_dist = int(self.plugin.get_setting("slide_dist", 20))
+            except:
+                slide_dist = 20
+
+            now = time.time()
+            layout = view.getLayout()
+            pad_L = view.getPaddingLeft()
+            pad_T = view.getPaddingTop()
+            scr_X = view.getScrollX()
+            scr_Y = view.getScrollY()
+
+            orig_A = paint.getAlpha()
+
+            if state.blur_paint is None:
+                state.blur_paint = self._Paint(1)
+                state.blur_paint.setAntiAlias(True)
+            if state.glitch_paint is None:
+                state.glitch_paint = self._Paint(1)
+                state.glitch_paint.setAntiAlias(True)
+
+            sorted_indices = sorted(state.char_start_times.keys())
+
+            for idx in sorted_indices:
+                try:
+                    if idx >= text_seq.length(): continue
+
+                    c = text_seq.charAt(idx)
+
+                    if Character.isLowSurrogate(c):
+                        continue
+
+                    start_t = state.char_start_times[idx]
+                    char_to_draw = str(c)
+                    is_emoji_or_symbol = False
+
+                    if Character.isHighSurrogate(c):
+                        if idx + 1 < text_seq.length():
+                            c2 = text_seq.charAt(idx + 1)
+                            if Character.isLowSurrogate(c2):
+                                is_emoji_or_symbol = True
+                    else:
+                        c_type = Character.getType(c)
+                        if c_type == Character.OTHER_SYMBOL:
+                            is_emoji_or_symbol = True
+
+                    if is_emoji_or_symbol:
+                        continue
+
+                    prog = min(1.0, (now - start_t) * 1000 / duration)
+                    prog = self._ease_out_quint(prog)
+
+                    x, y = self._get_char_pos(view, layout, paint, text_seq, idx, pad_L, pad_T, scr_X, scr_Y)
+
+                    y_off = 0
+                    if slide_enabled:
+                        y_off = int(-slide_dist * (1.0 - prog))
+
+                    if glitch_enabled:
+                         self._draw_char_with_glitch(canvas, state, char_to_draw, x, y + y_off, paint, prog, orig_A)
+                    elif blur_enabled:
+                        self._draw_char_with_blur(canvas, state, char_to_draw, x, y + y_off, paint, prog, blur_rad, orig_A)
+                    else:
+                        alpha = int(prog * orig_A)
+                        if alpha > 0:
+                            paint.setAlpha(alpha)
+                            canvas.drawText(char_to_draw, x, y + y_off, paint)
+                except:
+                    pass
+
+            paint.setAlpha(orig_A)
+        except Exception as e:
+            self.plugin.log(f"[ERROR] Char draw: {e}")
+
+    def _ease_out_quint(self, t):
+        return 1 - pow(1 - t, 5)
+
+    def _get_char_pos(self, view, layout, paint, txt_seq, idx, pad_L, pad_T, scr_X, scr_Y):
+        try:
+            if layout:
+                line = layout.getLineForOffset(idx)
+                # Use offset helper instead of simple padding
+                y_offset = self._get_vertical_offset(view, layout)
+
+                x = pad_L + layout.getPrimaryHorizontal(idx)
+                y = y_offset + layout.getLineBaseline(line)
+            else:
+                # Fallback to pure measurement
+                pre_w = paint.measureText(txt_seq, 0, idx)
+                x = pad_L + pre_w
+                y = view.getBaseline()
+            return x, y
+        except:
+            return 0, 0
+
+    def _draw_char_with_glitch(self, canvas, state, char, x, y, paint, prog, orig_a):
+        if prog >= 1.0:
+            paint.setAlpha(orig_a)
+            canvas.drawText(char, x, y, paint)
+            return
+
+        alpha = int(prog * orig_a)
+        if alpha < 10: return
+
+        jitter = (1.0 - prog) * 10.0
+
+        off_x_r = random.uniform(-jitter, jitter)
+        off_y_r = random.uniform(-jitter, jitter)
+        off_x_b = random.uniform(-jitter, jitter)
+        off_y_b = random.uniform(-jitter, jitter)
+
+        g_paint = state.glitch_paint
+        g_paint.setTextSize(paint.getTextSize())
+        g_paint.setTypeface(paint.getTypeface())
+
+        g_paint.setARGB(alpha, 255, 0, 0)
+        canvas.drawText(char, x + off_x_r - 2, y + off_y_r, g_paint)
+
+        g_paint.setARGB(alpha, 0, 255, 255)
+        canvas.drawText(char, x + off_x_b + 2, y + off_y_b, g_paint)
+
+        g_paint.setARGB(alpha, 255, 255, 255)
+        canvas.drawText(char, x, y, g_paint)
+
+
+    def _draw_char_with_blur(self, canvas, state, char, x, y, paint, prog, blur_rad, orig_a):
+        blur_a = int((1.0 - prog) * 255)
+        normal_a = 0
+        if prog > 0.2:
+            normal_a = int(((prog - 0.2) / 0.8) * 255)
+
+        if blur_a > 5 and self._Utilities:
+            try:
+                sc = 2.0
+                bw = max(4, int(paint.measureText(char) / sc + blur_rad * 2))
+                bh = max(4, int(paint.getTextSize() / sc * 1.5 + blur_rad * 2))
+
+                bmp = self._Bitmap.createBitmap(bw, bh, self._BitmapConfig)
+                tmp = self._Canvas(bmp)
+                tmp.scale(1.0 / sc, 1.0 / sc)
+                tmp.translate(blur_rad * 2, paint.getTextSize() * 1.5 - blur_rad * 2)
+
+                paint.setAlpha(255)
+                tmp.drawText(char, 0, 0, paint)
+
+                self._Utilities.stackBlurBitmap(bmp, max(1, int(blur_rad / sc)))
+
+                d_paint = state.blur_paint
+                d_paint.setAlpha(blur_a)
+
+                canvas.save()
+                canvas.translate(x - blur_rad * 2, y - paint.getTextSize() * 1.5 + blur_rad * 2)
+                canvas.scale(sc, sc)
+                canvas.drawBitmap(bmp, 0, 0, d_paint)
+                canvas.restore()
+
+                bmp.recycle()
+            except:
+                pass
+
+        if normal_a > 0:
+            paint.setAlpha(int(normal_a / 255.0 * orig_a))
+            canvas.drawText(char, x, y, paint)
+
+
+class TextBlurAnimationPlugin(BasePlugin):
+
+    def __init__(self):
+        super().__init__()
+        self._hooks = []
+        self._states = WeakKeyDictionary()
+        self.field_resourcesProvider = None
+        self.field_cursorWidth = None
+        self.key_chat_messagePanelCursor = None
+        self.Theme = None
+        self.View = None
+        self.OnLayoutChangeListener = None
+        self._hooked_methods = set()
+
+    def get_state(self, view) -> AnimationState:
+        if view not in self._states:
+            self._states[view] = AnimationState()
+        return self._states[view]
+
+    def _enable_hardware_acceleration(self, view, state):
+        if not self.plugin.get_setting("gpu_acceleration", True):
+            return
+        if state.hardware_layer_enabled:
+            return
+        try:
+            if self.View is None:
+                self.View = jclass("android.view.View")
+            view.setLayerType(self.View.LAYER_TYPE_HARDWARE, None)
+            state.hardware_layer_enabled = True
+        except:
+            pass
+
+    def _disable_hardware_acceleration(self, view, state):
+        if not state.hardware_layer_enabled:
+            return
+        try:
+            if self.View is None:
+                self.View = jclass("android.view.View")
+            view.setLayerType(self.View.LAYER_TYPE_NONE, None)
+            state.hardware_layer_enabled = False
+        except:
+            pass
+
+    def _start_heartbeat(self, view):
+        state = self.get_state(view)
+        if state.heartbeat_running:
+            return
+        state.heartbeat_running = True
+
+        def loop():
+            if not state.is_focused:
+                state.heartbeat_running = False
+                return
+            try:
+                if not view.isShown():
+                    state.heartbeat_running = False
+                    return
+
+                view.invalidate()
+                run_on_ui_thread(loop, delay=10)
+            except:
+                state.heartbeat_running = False
+
+        run_on_ui_thread(loop)
+
+    def _ensure_layout_listener(self, view, state):
+        """Attaches a layout listener to wake up animation when view resizes/appears"""
+        if state.layout_listener or not self.OnLayoutChangeListener:
+            return
+
+        try:
+            state.layout_listener = self.OnLayoutChangeListener(
+                lambda v, l, t, r, b, ol, ot, or_, ob:
+                self._start_heartbeat(v) if v.isFocused() else None
+            )
+            view.addOnLayoutChangeListener(state.layout_listener)
+        except:
+            pass
+
+    def _update_cursor_color_cache(self, view, state):
+        """Fetches cursor color once (via reflection/provider) and caches it."""
+        try:
+            # Default from Theme (Global)
+            final_color = 0xFF2CA5E0
+            if self.Theme and self.key_chat_messagePanelCursor:
+                 final_color = self.Theme.getColor(self.key_chat_messagePanelCursor)
+
+            # Try to get specific chat resource provider
+            if self.field_resourcesProvider:
+                prov = self.field_resourcesProvider.get(view)
+                if prov:
+                    # If provider exists, ask it for color.
+                    # This respects per-chat themes.
+                    # We access the method dynamically to avoid interface issues.
+                    try:
+                        final_color = prov.getColor(self.key_chat_messagePanelCursor)
+                    except:
+                        pass
+
+            state.cached_cursor_color = final_color
+            state.is_color_cached = True
+        except:
+            pass
+
+    def _find_declared_method_recursive(self, cls, method_name, param_classes):
+        """Helper to find which class in hierarchy actually declares the method"""
+        curr = cls
+        while curr:
+            try:
+                m = curr.getDeclaredMethod(method_name, param_classes)
+                return m
+            except:
+                pass
+            curr = curr.getSuperclass()
+        return None
+
+    def on_plugin_load(self):
+        self.log("Loading v3.25.0 (OPTIMIZED PROVIDER)...")
+        self._hooks = []
+        self._hooked_methods = set()
+
+        try:
+            self.Theme = jclass("org.telegram.ui.ActionBar.Theme")
+            self.key_chat_messagePanelCursor = getattr(self.Theme, "key_chat_messagePanelCursor")
+        except:
+            pass
+
+        try:
+            self.View = jclass("android.view.View")
+            self.OnLayoutChangeListener = jclass("android.view.View$OnLayoutChangeListener")
+        except:
+            pass
+
+        # === TARGET CLASS LIST ===
+        target_classes = [
+            "org.telegram.ui.Components.EditTextCaption",      # Chat Input
+            "org.telegram.ui.Components.EditTextBoldCursor",   # Search, Bio
+            "org.telegram.ui.Components.EditTextEffects",       # Base
+            "android.widget.EditText" # System Fallback
+        ]
+
+        # 1. FIND FIELDS (Restored from v3.23)
+        found_fields = False
+        for n in target_classes:
+            try:
+                c = JClass.forName(n)
+                cls_obj = getattr(c, "class_", c)
+
+                if not self.field_resourcesProvider:
+                    curr = cls_obj
+                    while curr:
+                        try:
+                            f = curr.getDeclaredField("resourcesProvider")
+                            f.setAccessible(True)
+                            self.field_resourcesProvider = f
+                            break
+                        except:
+                            curr = curr.getSuperclass()
+
+                if not self.field_cursorWidth:
+                    curr = cls_obj
+                    while curr:
+                        try:
+                            f = curr.getDeclaredField("cursorWidth")
+                            f.setAccessible(True)
+                            self.field_cursorWidth = f
+                            break
+                        except:
+                            curr = curr.getSuperclass()
+
+                if self.field_resourcesProvider and self.field_cursorWidth:
+                    found_fields = True
+                    break
+            except:
+                pass
+
+        cnv = jclass("android.graphics.Canvas")
+        cnv_cls = getattr(cnv, "class_", cnv)
+
+        # 2. SMART HOOKING
+        for class_name in target_classes:
+            try:
+                t_cls = JClass.forName(class_name)
+                if not t_cls: continue
+                cls_obj = getattr(t_cls, "class_", t_cls)
+
+                # Hook onDraw
+                real_ondraw = self._find_declared_method_recursive(cls_obj, "onDraw", cnv_cls)
+                if real_ondraw:
+                    m_str = str(real_ondraw)
+                    if m_str not in self._hooked_methods:
+                        real_ondraw.setAccessible(True)
+                        self._hooks.append(self.hook_method(real_ondraw, TextBlurHook(self)))
+                        self._hooked_methods.add(m_str)
+                        self.log(f"Hooked onDraw: {class_name} -> {real_ondraw.getDeclaringClass().getName()}")
+
+                # Hook focus/touch
+                for m_name, hk_cls in [("onFocusChanged", FocusHook), ("onTouchEvent", TouchHook), ("onSelectionChanged", SelectionHook), ("onTextChanged", SelectionHook)]:
+                    real_method = None
+                    curr = cls_obj
+                    while curr and not real_method:
+                        try:
+                            for dm in curr.getDeclaredMethods():
+                                if dm.getName() == m_name:
+                                    real_method = dm
+                                    break
+                        except:
+                            pass
+                        curr = curr.getSuperclass()
+
+                    if real_method:
+                        m_str = str(real_method)
+                        if m_str not in self._hooked_methods:
+                            real_method.setAccessible(True)
+                            self._hooks.append(self.hook_method(real_method, hk_cls(self)))
+                            self._hooked_methods.add(m_str)
+            except:
+                pass
+
+        self.log("Loaded!")
+
+    def on_plugin_unload(self):
+        for view, state in list(self._states.items()):
+            try:
+                self._disable_hardware_acceleration(view, state)
+                if state.layout_listener and self.OnLayoutChangeListener:
+                    view.removeOnLayoutChangeListener(state.layout_listener)
+            except:
+                pass
+
+        for h in self._hooks:
+            self.unhook_method(h)
+        self._hooks.clear()
+        self._states.clear()
+        self._hooked_methods.clear()
+        self.field_resourcesProvider = None
+        self.field_cursorWidth = None
+        self.OnLayoutChangeListener = None
+        self.log("Unloaded!")
+
+    def _show_test_dialog(self, view):
+        from client_utils import get_last_fragment
+        from ui.alert import AlertDialogBuilder
+
+        try:
+            fragment = get_last_fragment()
+            if not fragment:
+                self.log("No fragment available")
+                return
+
+            activity = fragment.getParentActivity()
+            if not activity:
+                self.log("No activity available")
+                return
+
+            FrameLayout = jclass("android.widget.FrameLayout")
+            LayoutParams = jclass("android.widget.FrameLayout$LayoutParams")
+            TypedValue = jclass("android.util.TypedValue")
+            Gravity = jclass("android.view.Gravity")
+            Theme = jclass("org.telegram.ui.ActionBar.Theme")
+            AndroidUtilities = jclass("org.telegram.messenger.AndroidUtilities")
+            EditTextCaption = jclass("org.telegram.ui.Components.EditTextCaption")
+
+            container = FrameLayout(activity)
+
+            edit_text = EditTextCaption(activity, None)
+            edit_text.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18)
+            edit_text.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+            edit_text.setHintTextColor(Theme.getColor(Theme.key_dialogTextHint))
+            edit_text.setBackgroundDrawable(None)
+            edit_text.setPadding(
+                AndroidUtilities.dp(24),
+                AndroidUtilities.dp(16),
+                AndroidUtilities.dp(24),
+                AndroidUtilities.dp(16)
+            )
+            edit_text.setGravity(Gravity.TOP | Gravity.LEFT)
+            edit_text.setInputType(1 | 0x00020000 | 0x00001000)
+            edit_text.setMaxLines(6)
+            edit_text.setSingleLine(False)
+
+            from org.telegram.messenger import LocaleController
+            try:
+                lang = LocaleController.getInstance().getCurrentLocale().getLanguage()
+            except:
+                lang = "en"
+            is_ru = str(lang).startswith("ru")
+
+            hint_text = "Печатайте и удаляйте для теста..." if is_ru else "Type and delete to test..."
+            edit_text.setHint(hint_text)
+
+            params = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            container.addView(edit_text, params)
+
+            title = "Тест анимации" if is_ru else "Animation Test"
+            close_text = "Закрыть" if is_ru else "Close"
+
+            builder = AlertDialogBuilder(activity)
+            builder.set_title(title)
+            builder.set_view(container, AndroidUtilities.dp(150))
+            builder.set_positive_button(close_text, lambda b, w: b.dismiss())
+            builder.show()
+
+            def setup_focus():
+                edit_text.requestFocus()
+                state = self.get_state(edit_text)
+                state.is_focused = True
+                self._enable_hardware_acceleration(edit_text, state)
+                self._start_heartbeat(edit_text)
+
+            run_on_ui_thread(setup_focus, delay=100)
+
+        except Exception as e:
+            self.log(f"Error showing test dialog: {e}")
+
+    def create_settings(self):
+        from org.telegram.messenger import LocaleController
+
+        try:
+            lang = LocaleController.getInstance().getCurrentLocale().getLanguage()
+        except:
+            lang = "en"
+
+        is_ru = str(lang).startswith("ru")
+
+        slide_enabled = self.get_setting("slide_enabled", True)
+        delete_animation_enabled = self.get_setting("delete_animation_enabled", True)
+
+        settings = [
+            Header(text="Основные" if is_ru else "General"),
+
+            Switch(
+                key="enabled",
+                text="Включить плагин" if is_ru else "Enable Plugin",
+                default=True,
+                subtext="Главный переключатель" if is_ru else "Master switch",
+                icon=""
+            ),
+
+            Switch(
+                key="gpu_acceleration",
+                text="GPU ускорение" if is_ru else "GPU Acceleration",
+                default=True,
+                subtext="Аппаратное ускорение рендеринга" if is_ru else "Hardware accelerated rendering",
+                icon="msg_speed"
+            ),
+
+            Text(
+                text="Тестировать анимацию" if is_ru else "Test Animation",
+                icon="msg_photo_curve_solar",
+                accent=True,
+                on_click=self._show_test_dialog
+            ),
+
+            Divider(),
+            Header(text="Анимация текста" if is_ru else "Text Animation"),
+
+            Switch(
+                key="blur_enabled",
+                text="Эффект размытия" if is_ru else "Blur Effect",
+                default=True,
+                subtext="Размытие при вводе и удалении" if is_ru else "Blur on type and delete",
+                icon="msg_photo_blur_solar"
+            ),
+
+            Switch(
+                key="glitch_enabled",
+                text="Эффект глитча" if is_ru else "Glitch Effect",
+                default=False,
+                subtext="RGB сдвиг и помехи" if is_ru else "RGB shift and glitches",
+                icon="msg_camera"
+            ),
+
+            Switch(
+                key="slide_enabled",
+                text="Слайд эффект" if is_ru else "Slide Effect",
+                default=True,
+                subtext="Вертикальное смещение" if is_ru else "Vertical slide",
+                icon="msg_contacts_name_solar"
+            ),
+
+            Input(
+                key="duration",
+                text="Длительность (мс)" if is_ru else "Duration (ms)",
+                default="300",
+                subtext="Появление букв" if is_ru else "Entry animation",
+                icon="msg_contacts_time_solar"
+            ),
+
+            Input(
+                key="blur_radius",
+                text="Радиус размытия" if is_ru else "Blur Radius",
+                default="10",
+                subtext="5-15 рекомендуется" if is_ru else "5-15 recommended",
+                icon="msg_instant_link_solar"
+            ),
+        ]
+
+        if slide_enabled:
+            settings.append(
+                Input(
+                    key="slide_dist",
+                    text="Дистанция слайда" if is_ru else "Slide Distance",
+                    default="20",
+                    subtext="Пиксели смещения" if is_ru else "Pixels offset",
+                    icon="msg_map_type_solar"
+                )
+            )
+
+        settings.extend([
+            Divider(),
+            Header(text="Анимация удаления" if is_ru else "Delete Animation"),
+
+            Switch(
+                key="delete_animation_enabled",
+                text="Анимировать удаление" if is_ru else "Animate Deletion",
+                default=True,
+                subtext="Использовать эффекты при стирании" if is_ru else "Use effects when deleting",
+                icon="msg_delete"
+            ),
+        ])
+
+        if delete_animation_enabled:
+            settings.extend([
+                Input(
+                    key="delete_duration",
+                    text="Длительность (мс)" if is_ru else "Duration (ms)",
+                    default="200",
+                    subtext="Исчезновение букв" if is_ru else "Exit animation",
+                    icon="msg_contacts_time_solar"
+                ),
+
+                Switch(
+                    key="delete_particles_enabled",
+                    text="Частицы при удалении" if is_ru else "Delete Particles",
+                    default=True,
+                    subtext="Взрывные частицы" if is_ru else "Explosion particles",
+                    icon="msg_customize"
+                ),
+
+                Input(
+                    key="delete_particle_count",
+                    text="Количество частиц" if is_ru else "Particle Count",
+                    default=DEFAULT_PARTICLE_COUNT,
+                    subtext="На символ" if is_ru else "Per character",
+                    icon="msg_list_solar"
+                ),
+
+                Input(
+                    key="delete_particle_speed",
+                    text="Скорость частиц" if is_ru else "Particle Speed",
+                    default="30",
+                    subtext="Множитель скорости" if is_ru else "Speed multiplier",
+                    icon="msg_speed"
+                ),
+            ])
+
+        settings.extend([
+            Divider(),
+            Header(text="Частицы" if is_ru else "Particles"),
+            # ... rest is same
+            Switch(
+                key="particles_enabled",
+                text="Эффект частиц (ввод)" if is_ru else "Type Particles",
+                default=False,
+                subtext="Вылет частиц при вводе" if is_ru else "Particles on typing",
+                icon="msg_customize"
+            ),
+            Input(
+                key="particle_count",
+                text="Количество частиц" if is_ru else "Particle Count",
+                default=DEFAULT_PARTICLE_COUNT,
+                subtext="На одну букву (3-10)" if is_ru else "Per character (3-10)",
+                icon="msg_list_solar"
+            ),
+            Input(
+                key="particle_speed",
+                text="Скорость частиц" if is_ru else "Particle Speed",
+                default="25",
+                subtext="Множитель скорости" if is_ru else "Speed multiplier",
+                icon="msg_speed"
+            ),
+            Divider(),
+            Header(text="Плавный курсор" if is_ru else "Smooth Cursor"),
+            Switch(
+                key="cursor_enabled",
+                text="Плавный курсор" if is_ru else "Smooth Cursor",
+                default=True,
+                subtext="Плавное движение курсора" if is_ru else "Fluid cursor movement",
+                icon="msg_edit"
+            ),
+            Switch(
+                key="cursor_rainbow",
+                text="Переливающийся курсор" if is_ru else "Rainbow Cursor",
+                default=False,
+                subtext="Игнорировать тему и использовать RGB" if is_ru else "Ignore theme and use RGB loop",
+                icon="msg_palette"
+            ),
+            Input(
+                key="cursor_rainbow_speed",
+                text="Скорость перелива" if is_ru else "Rainbow Speed",
+                default="25",
+                subtext="Чем выше, тем быстрее смена цвета" if is_ru else "Higher is faster color cycle",
+                icon="msg_speed"
+            ),
+            Input(
+                key="cursor_speed",
+                text="Скорость анимации" if is_ru else "Animation Speed",
+                default="25",
+                subtext="Скорость движения (10-100)" if is_ru else "Movement speed (10-100)",
+                icon="msg_speed"
+            ),
+            Input(
+                key="cursor_width",
+                text="Ширина курсора" if is_ru else "Cursor Width",
+                default="5",
+                subtext="Толщина курсора в пикселях" if is_ru else "Cursor thickness in pixels",
+                icon="msg_edit"
+            )
+        ])
+
+        return settings
